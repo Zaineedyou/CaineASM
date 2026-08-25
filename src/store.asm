@@ -4,6 +4,7 @@ DEFAULT REL
 global store_set
 global store_get
 global store_delete
+global store_foreach
 global store_replay_record
 
 global store_set_raw
@@ -99,6 +100,60 @@ store_set_raw:
     pop rbx
     ret
 .bad:
+    mov eax, -1
+    ret
+
+; RDI=callback, RSI=context. For each active record, callback receives:
+; RDI=context, RSI=key pointer, EDX=key length, RCX=value pointer, R8D=value length.
+; Callback returns 0 to continue, a positive value to stop successfully, or a
+; negative value to abort. EAX returns visited entries, or -1 on invalid/error.
+; The callback must not mutate the store while iteration is active.
+store_foreach:
+    test rdi, rdi
+    jz .bad_no_callback
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    xor r14d, r14d
+    xor r15d, r15d
+.loop:
+    cmp r14d, SLOT_COUNT
+    jae .done
+    imul rax, r14, SLOT_SIZE
+    lea rbx, [store_slots + rax]
+    cmp byte [rbx], 1
+    jne .next
+    mov rdi, r13
+    lea rsi, [rbx + 16]
+    mov edx, [rbx + 4]
+    lea rcx, [rbx + 16 + KEY_CAP]
+    mov r8d, [rbx + 8]
+    call r12
+    test eax, eax
+    js .error
+    inc r15d
+    test eax, eax
+    jnz .done
+.next:
+    inc r14d
+    jmp .loop
+.done:
+    mov eax, r15d
+    jmp .out
+.error:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.bad_no_callback:
     mov eax, -1
     ret
 
