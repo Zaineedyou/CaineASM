@@ -18,12 +18,12 @@ Gateway NASM menerima Hello, mengirim Identify, menyimpan sequence Dispatch, men
 |---|---|
 | Gateway WSS, Hello, Identify, ACK heartbeat, sequence, READY, Resume | Diimplementasikan dan diuji dengan mock transport NASM |
 | Dispatch `MESSAGE_CREATE` | Diimplementasikan untuk filter bot, prefix, command, dan REST reply |
-| Command dasar | `help`, `status`, `reset`, `afk`, `rank`, dan `summarize` aktif |
-| AFK | Set AFK per guild/user dan clear otomatis saat pengguna berikutnya mengirim pesan; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
-| XP/rank | Increment XP per pesan guild dan `rank`; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
+| Command dasar | `help`, `status`, `reset`, `afk`, `afklist`, `rank`, `leaderboard`, dan `summarize` aktif |
+| AFK | Set AFK per guild/user, `afklist` guild-scoped, dan clear otomatis saat pengguna berikutnya mengirim pesan; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
+| XP/rank | Increment XP per pesan guild, `rank`, dan `leaderboard` guild-scoped; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
 | Groq AI | `summarize <text>` membuat Chat Completion non-streaming melalui HTTPS dan parser respons NASM |
 | REST Discord | Pengiriman pesan JSON escaped serta route DELETE message yang tervalidasi; policy moderasi belum diaktifkan |
-| Moderasi, leaderboard, welcome/goodbye, autorole, interactions, history multi-turn | Belum diimplementasikan |
+| Moderasi, welcome/goodbye, autorole, interactions, history multi-turn | Belum diimplementasikan |
 | Persistence disk | Journal append-only NASM opsional untuk AFK/XP; record checksum-valid di-replay sebelum Gateway berjalan |
 | Database client | Tidak digunakan |
 
@@ -38,7 +38,7 @@ make test
 make source-ratio
 ```
 
-`make test` menjalankan vector test NASM untuk router command, store/AFK, journal persistence, replay state AFK/XP, REST Discord, parser JSON, dispatcher, Gateway, Groq, dan XP. Checkpoint saat ini tervalidasi secara lokal dengan mock deterministik dan syscall file aktual; **belum diuji end-to-end memakai token Discord/Groq nyata**.
+`make test` menjalankan vector test NASM untuk router command, store/AFK, formatter daftar state, journal persistence, replay state AFK/XP, REST Discord, parser JSON, dispatcher, Gateway, Groq, dan XP. Checkpoint saat ini tervalidasi secara lokal dengan mock deterministik dan syscall file aktual; **belum diuji end-to-end memakai token Discord/Groq nyata**.
 
 ## Environment
 
@@ -61,8 +61,12 @@ Jangan menyimpan token ke source, image container, commit, atau log. Aktifkan pr
 | `!status` | Mengonfirmasi jalur Gateway dan REST aktif. |
 | `!reset` | Menjelaskan bahwa reset persistence belum tersedia. |
 | `!afk [alasan]` | Menyimpan AFK untuk guild dan user pengirim; durable hanya bila `CAINE_STATE_FILE` tersedia. |
+| `!afklist` | Menampilkan AFK guild saat ini dengan user ID dan alasan tersanitasi; output dibatasi 2000 byte. |
 | `!rank` | Mengirim XP pengirim pada guild tersebut; durable hanya bila `CAINE_STATE_FILE` tersedia. |
+| `!leaderboard` | Menampilkan maksimum 20 XP tertinggi pada guild, diurutkan XP menurun lalu user ID secara deterministik; output dibatasi 2000 byte. |
 | `!summarize <teks>` | Mengirim teks bounded ke Groq dan membalas hasilnya. |
+
+Formatter daftar state hanya memakai iterator store NASM, memfilter key tepat per guild, serta mengabaikan nilai XP yang bukan desimal `uint32` valid. Nama tampilan Discord tidak digunakan karena checkpoint ini hanya menyimpan user ID dari event `MESSAGE_CREATE`; ini bukan database atau layanan leaderboard lengkap. Jika ruang reply habis, formatter menambahkan penanda truncation dan berhenti sebelum melampaui batas Discord.
 
 Command yang telah diklasifikasikan tetapi belum memiliki handler membalas status yang eksplisit. Ini disengaja agar bot tidak mengklaim melakukan moderasi atau konfigurasi yang belum benar-benar diimplementasikan.
 

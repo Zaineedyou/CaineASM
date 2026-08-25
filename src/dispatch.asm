@@ -14,6 +14,8 @@ extern afk_set
 extern afk_clear
 extern xp_increment
 extern xp_get
+extern state_format_afk_list
+extern state_format_leaderboard
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -23,11 +25,14 @@ extern bot_prefix_len
 %define AUTHOR_ID_CAP 64
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
+%define STATE_VIEW_REPLY_CAP 2000
 
 %define CMD_HELP   1
 %define CMD_RESET  2
 %define CMD_AFK    3
+%define CMD_AFKLIST 4
 %define CMD_RANK   5
+%define CMD_LEADERBOARD 6
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
 
@@ -217,8 +222,12 @@ dispatch_message_create:
     je .help
     cmp eax, CMD_AFK
     je .afk
+    cmp eax, CMD_AFKLIST
+    je .afklist
     cmp eax, CMD_RANK
     je .rank
+    cmp eax, CMD_LEADERBOARD
+    je .leaderboard
     cmp eax, CMD_STATUS
     je .status
     cmp eax, CMD_RESET
@@ -278,6 +287,19 @@ dispatch_message_create:
     lea rdi, [afk_response]
     mov esi, afk_response_len
     jmp .reply
+.afklist:
+    cmp dword [guild_id_len], 0
+    je .state_view_unavailable
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [state_view_reply]
+    mov ecx, STATE_VIEW_REPLY_CAP
+    call state_format_afk_list
+    test eax, eax
+    jle .state_view_error
+    mov esi, eax
+    lea rdi, [state_view_reply]
+    jmp .reply
 .rank:
     cmp dword [guild_id_len], 0
     je .rank_unavailable
@@ -302,9 +324,30 @@ dispatch_message_create:
     mov esi, eax
     lea rdi, [rank_response]
     jmp .reply
+.leaderboard:
+    cmp dword [guild_id_len], 0
+    je .state_view_unavailable
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [state_view_reply]
+    mov ecx, STATE_VIEW_REPLY_CAP
+    call state_format_leaderboard
+    test eax, eax
+    jle .state_view_error
+    mov esi, eax
+    lea rdi, [state_view_reply]
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
+    jmp .reply
+.state_view_unavailable:
+    lea rdi, [state_view_unavailable_response]
+    mov esi, state_view_unavailable_response_len
+    jmp .reply
+.state_view_error:
+    lea rdi, [state_view_error_response]
+    mov esi, state_view_error_response_len
     jmp .reply
 .afk_unavailable:
     lea rdi, [afk_unavailable_response]
@@ -491,6 +534,10 @@ rank_prefix: db 'Your XP: '
 rank_prefix_len equ $ - rank_prefix
 rank_unavailable_response: db 'Rank is available only for messages sent in a server.'
 rank_unavailable_response_len equ $ - rank_unavailable_response
+state_view_unavailable_response: db 'This command is available only for messages sent in a server.'
+state_view_unavailable_response_len equ $ - state_view_unavailable_response
+state_view_error_response: db 'State view could not be rendered.'
+state_view_error_response_len equ $ - state_view_error_response
 default_afk_reason: db 'AFK'
 default_afk_reason_len equ $ - default_afk_reason
 
@@ -506,3 +553,4 @@ rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP
+state_view_reply: resb STATE_VIEW_REPLY_CAP

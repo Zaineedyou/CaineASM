@@ -10,6 +10,8 @@ global afk_set
 global xp_increment
 global xp_get
 global afk_clear
+global state_format_afk_list
+global state_format_leaderboard
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -120,8 +122,38 @@ _start:
     cmp qword [send_calls], 5
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
+    ; AFK list is guild-scoped and dispatch still records the message XP first.
     mov dword [failure_stage], 8
+    lea rax, [afklist_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], afklist_response_len
+    lea rdi, [afklist_event]
+    mov esi, afklist_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 6
+    jne .fail
+    cmp qword [xp_calls], 3
+    jne .fail
+
+    ; Leaderboard is guild-scoped and uses the same bounded view reply seam.
+    mov dword [failure_stage], 9
+    lea rax, [leaderboard_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], leaderboard_response_len
+    lea rdi, [leaderboard_event]
+    mov esi, leaderboard_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 7
+    jne .fail
+    cmp qword [xp_calls], 4
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 10
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -130,7 +162,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 6
+    cmp qword [send_calls], 8
     jne .fail
 
     mov eax, SYS_EXIT
@@ -174,6 +206,56 @@ xp_get:
 
 afk_clear:
     xor eax, eax
+    ret
+
+; Formatter seams verify dispatch's guild and exact Discord-capacity contract.
+; RDI=guild, ESI=guild len, RDX=output, ECX=capacity.
+state_format_afk_list:
+    push rbx
+    mov rbx, rdx
+    cmp esi, guild_id_len
+    jne .bad
+    cmp ecx, 2000
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    lea rsi, [afklist_response]
+    mov edx, afklist_response_len
+    call copy_bytes
+    mov eax, afklist_response_len
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
+    ret
+
+state_format_leaderboard:
+    push rbx
+    mov rbx, rdx
+    cmp esi, guild_id_len
+    jne .bad
+    cmp ecx, 2000
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    lea rsi, [leaderboard_response]
+    mov edx, leaderboard_response_len
+    call copy_bytes
+    mov eax, leaderboard_response_len
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
     ret
 
 ; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=volatile total.
@@ -317,6 +399,10 @@ rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
 afk_event_len equ $ - afk_event
+afklist_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afklist","author":{"id":"user-2","bot":false}}}'
+afklist_event_len equ $ - afklist_event
+leaderboard_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^leaderboard","author":{"id":"user-2","bot":false}}}'
+leaderboard_event_len equ $ - leaderboard_event
 guild_id: db 'guild-1'
 guild_id_len equ $ - guild_id
 author_id: db 'user-2'
@@ -339,6 +425,10 @@ status_response: db 'CaineASM is online. Gateway and REST command handling are a
 status_response_len equ $ - status_response
 rank_response: db 'Your XP: 42'
 rank_response_len equ $ - rank_response
+afklist_response: db 'AFK members:', 10, '- user-2: dinner', 10
+afklist_response_len equ $ - afklist_response
+leaderboard_response: db 'XP leaderboard:', 10, '1. user-2 - 3 XP', 10
+leaderboard_response_len equ $ - leaderboard_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
 unknown_response: db 'Unknown command. Use !help.'
