@@ -7,6 +7,7 @@ global _start
 global discord_send_text
 global groq_chat_once
 global afk_set
+global xp_increment
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -28,6 +29,8 @@ _start:
     test eax, eax
     jnz .fail
     cmp qword [send_calls], 1
+    jne .fail
+    cmp qword [xp_calls], 0
     jne .fail
 
     ; Bot-authored events are ignored and must not generate a reply loop.
@@ -65,6 +68,8 @@ _start:
     jnz .fail
     cmp qword [send_calls], 2
     jne .fail
+    cmp qword [xp_calls], 0
+    jne .fail
 
     ; Summarize forwards only text after the command to the NASM Groq client.
     mov dword [failure_stage], 5
@@ -80,6 +85,8 @@ _start:
     jne .fail
     cmp qword [groq_calls], 1
     jne .fail
+    cmp qword [xp_calls], 0
+    jne .fail
 
     ; AFK receives guild, author, and text after the command as bounded state input.
     mov dword [failure_stage], 6
@@ -94,6 +101,8 @@ _start:
     cmp qword [send_calls], 4
     jne .fail
     cmp qword [afk_calls], 1
+    jne .fail
+    cmp qword [xp_calls], 1
     jne .fail
 
     ; A known-but-not-yet-implemented command is transparent, not silently handled.
@@ -151,6 +160,33 @@ groq_chat_once:
     call copy_bytes
     inc qword [groq_calls]
     mov eax, ai_response_len
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=volatile total.
+xp_increment:
+    mov r11, rdx
+    cmp esi, guild_id_len
+    jne .bad
+    cmp ecx, author_id_len
+    jne .bad
+    lea r8, [guild_id]
+    mov r9d, esi
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    mov rdi, r11
+    lea rsi, [author_id]
+    mov edx, author_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [xp_calls]
+    mov eax, 1
     ret
 .bad:
     mov eax, -1
@@ -303,4 +339,5 @@ expected_text_len: dd 0
 send_calls: dq 0
 groq_calls: dq 0
 afk_calls: dq 0
+xp_calls: dq 0
 failure_stage: dd 0

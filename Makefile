@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -14,8 +14,9 @@ JSON_TEST := $(BUILD_DIR)/json-vector
 DISPATCH_TEST := $(BUILD_DIR)/dispatch-vector
 GATEWAY_TEST := $(BUILD_DIR)/gateway-vector
 GROQ_TEST := $(BUILD_DIR)/groq-vector
+XP_TEST := $(BUILD_DIR)/xp-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test
 
 all: $(BINARY)
 
@@ -47,6 +48,9 @@ $(BUILD_DIR)/store.o: src/store.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/afk.o: src/afk.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/xp.o: src/xp.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/driver.o: adapter/driver.c | $(BUILD_DIR)
@@ -121,7 +125,16 @@ $(GROQ_TEST): $(BUILD_DIR)/groq-vector.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/json.o
 test-groq: $(GROQ_TEST)
 	./$(GROQ_TEST)
 
-test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq
+$(BUILD_DIR)/xp-vector.o: tests/xp_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(XP_TEST): $(BUILD_DIR)/xp-vector.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/store.o
+	ld -static -z noexecstack -o $@ $^
+
+test-xp: $(XP_TEST)
+	./$(XP_TEST)
+
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp
 
 inspect: $(BINARY)
 	file $(BINARY)

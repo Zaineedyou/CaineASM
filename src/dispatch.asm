@@ -11,6 +11,7 @@ extern command_classify
 extern discord_send_text
 extern groq_chat_once
 extern afk_set
+extern xp_increment
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -124,6 +125,13 @@ dispatch_message_create:
     jle .content
     mov [author_id_len], eax
     mov byte [author_id + rax], 0
+    cmp dword [guild_id_len], 0
+    je .content
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call xp_increment
 
 .content:
     mov rdi, r12
