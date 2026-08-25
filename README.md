@@ -64,7 +64,7 @@ Command yang telah diklasifikasikan tetapi belum memiliki handler membalas statu
 
 ## Container dan deployment
 
-`Dockerfile` membangun NASM dan adapter libcurl langsung. Image deploy tidak memuat Go atau runtime Minecraft. Verifikasi peer dan hostname TLS libcurl tetap aktif untuk HTTPS dan WSS.
+`Dockerfile` membangun NASM dan adapter libcurl langsung. Image deploy tidak memuat Go atau runtime Minecraft. Verifikasi peer dan hostname TLS libcurl tetap aktif untuk HTTPS dan WSS. Docker engine tidak tersedia di sandbox saat checkpoint ini, sehingga build image end-to-end perlu dijalankan oleh CI atau platform deployment.
 
 Bot WebSocket perlu dijalankan sebagai proses yang tetap hidup pada host deployment. Sandbox pengembangan ini tidak dimaksudkan sebagai host produksi jangka panjang. Sebelum deploy, sediakan `DISCORD_TOKEN` dan `GROQ_API_KEY` sebagai environment secret platform, lalu jalankan `make test` dan build image tanpa memasukkan secret.
 
