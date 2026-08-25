@@ -6,7 +6,7 @@ global command_is_admin_only
 
 ; Input: RDI points to normalized command token, RSI contains its exact length.
 ; Output: EAX command ID. ID 0 means unknown or intentionally removed.
-; Minecraft bridge command names are deliberately absent from this routing table.
+; Removed legacy command names are deliberately absent from this routing table.
 
 %define CMD_UNKNOWN      0
 %define CMD_HELP         1
