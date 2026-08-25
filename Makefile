@@ -10,8 +10,9 @@ CURL_LIBS := $(shell pkg-config --libs libcurl)
 COMMAND_TEST := $(BUILD_DIR)/commands-vector
 STORE_AFK_TEST := $(BUILD_DIR)/store-afk-vector
 REST_TEST := $(BUILD_DIR)/discord-rest-vector
+JSON_TEST := $(BUILD_DIR)/json-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test
 
 all: $(BINARY)
 
@@ -75,7 +76,16 @@ $(REST_TEST): $(BUILD_DIR)/discord-rest-vector.o $(BUILD_DIR)/discord_rest.o $(B
 test-rest: $(REST_TEST)
 	./$(REST_TEST)
 
-test: test-commands test-store-afk test-rest
+$(BUILD_DIR)/json-vector.o: tests/json_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(JSON_TEST): $(BUILD_DIR)/json-vector.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-json: $(JSON_TEST)
+	./$(JSON_TEST)
+
+test: test-commands test-store-afk test-rest test-json
 
 inspect: $(BINARY)
 	file $(BINARY)
