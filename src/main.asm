@@ -8,8 +8,13 @@ global groq_key_ptr
 global groq_key_len
 global bot_prefix_ptr
 global bot_prefix_len
+global state_file_ptr
+global state_file_len
 
 extern gateway_run
+extern persist_configure
+extern persist_replay
+extern store_replay_record
 
 %define SYS_WRITE 1
 
@@ -24,6 +29,15 @@ asm_bot_main:
     je .missing
     cmp dword [groq_key_len], 0
     je .missing
+    mov rdi, [state_file_ptr]
+    mov esi, [state_file_len]
+    call persist_configure
+    test eax, eax
+    js .state_error
+    lea rdi, [store_replay_record]
+    call persist_replay
+    test eax, eax
+    js .state_error
     call gateway_run
     pop r12
     ret
@@ -31,6 +45,15 @@ asm_bot_main:
     mov edi, 2
     lea rsi, [configuration_error]
     mov edx, configuration_error_len
+    mov eax, SYS_WRITE
+    syscall
+    mov eax, 78
+    pop r12
+    ret
+.state_error:
+    mov edi, 2
+    lea rsi, [state_error]
+    mov edx, state_error_len
     mov eax, SYS_WRITE
     syscall
     mov eax, 78
@@ -61,6 +84,12 @@ load_environment:
     call has_prefix
     test al, al
     jnz .prefix
+    mov rdi, rbx
+    lea rsi, [env_state_file]
+    mov ecx, env_state_file_len
+    call has_prefix
+    test al, al
+    jnz .state_file
 .advance:
     add r13, 8
     jmp .next
@@ -84,6 +113,13 @@ load_environment:
     mov rdi, rax
     call cstring_length
     mov [bot_prefix_len], eax
+    jmp .advance
+.state_file:
+    lea rax, [rbx + env_state_file_len]
+    mov [state_file_ptr], rax
+    mov rdi, rax
+    call cstring_length
+    mov [state_file_len], eax
     jmp .advance
 .done:
     ret
@@ -124,8 +160,12 @@ env_groq: db 'GROQ_API_KEY='
 env_groq_len equ $ - env_groq
 env_prefix: db 'BOT_PREFIX='
 env_prefix_len equ $ - env_prefix
+env_state_file: db 'CAINE_STATE_FILE='
+env_state_file_len equ $ - env_state_file
 configuration_error: db 'caine-asm: DISCORD_TOKEN and GROQ_API_KEY are required', 10
 configuration_error_len equ $ - configuration_error
+state_error: db 'caine-asm: CAINE_STATE_FILE journal is unreadable or invalid', 10
+state_error_len equ $ - state_error
 
 section .data
 discord_token_ptr: dq 0
@@ -134,3 +174,5 @@ groq_key_ptr: dq 0
 groq_key_len: dd 0
 bot_prefix_ptr: dq 0
 bot_prefix_len: dd 0
+state_file_ptr: dq 0
+state_file_len: dd 0

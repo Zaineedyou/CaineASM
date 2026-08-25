@@ -19,12 +19,13 @@ Gateway NASM menerima Hello, mengirim Identify, menyimpan sequence Dispatch, men
 | Gateway WSS, Hello, Identify, ACK heartbeat, sequence, READY, Resume | Diimplementasikan dan diuji dengan mock transport NASM |
 | Dispatch `MESSAGE_CREATE` | Diimplementasikan untuk filter bot, prefix, command, dan REST reply |
 | Command dasar | `help`, `status`, `reset`, `afk`, `rank`, dan `summarize` aktif |
-| AFK | Set AFK per guild/user dan clear otomatis saat pengguna berikutnya mengirim pesan; state masih volatile |
-| XP/rank | Increment XP per pesan guild dan `rank`; state masih volatile |
+| AFK | Set AFK per guild/user dan clear otomatis saat pengguna berikutnya mengirim pesan; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
+| XP/rank | Increment XP per pesan guild dan `rank`; bertahan restart bila `CAINE_STATE_FILE` dikonfigurasi |
 | Groq AI | `summarize <text>` membuat Chat Completion non-streaming melalui HTTPS dan parser respons NASM |
 | REST Discord | Pengiriman pesan JSON escaped serta route DELETE message yang tervalidasi; policy moderasi belum diaktifkan |
 | Moderasi, leaderboard, welcome/goodbye, autorole, interactions, history multi-turn | Belum diimplementasikan |
-| Persistence disk/database | Belum diimplementasikan; restart menghapus AFK/XP/state |
+| Persistence disk | Journal append-only NASM opsional untuk AFK/XP; record checksum-valid di-replay sebelum Gateway berjalan |
+| Database client | Tidak digunakan |
 
 Klien Groq membuat request ke endpoint Chat Completions dengan header Bearer, model, dan messages, lalu mengambil `choices[0].message.content` dari respons.[2] Payload user, token Discord di Identify, dan teks reply di-escape sebagai string JSON bounded sebelum dikirim.
 
@@ -37,7 +38,7 @@ make test
 make source-ratio
 ```
 
-`make test` menjalankan vector test NASM untuk router command, store/AFK, REST Discord, parser JSON, dispatcher, Gateway, Groq, dan XP. Checkpoint saat ini tervalidasi secara lokal dengan mock deterministik; **belum diuji end-to-end memakai token Discord/Groq nyata**.
+`make test` menjalankan vector test NASM untuk router command, store/AFK, journal persistence, replay state AFK/XP, REST Discord, parser JSON, dispatcher, Gateway, Groq, dan XP. Checkpoint saat ini tervalidasi secara lokal dengan mock deterministik dan syscall file aktual; **belum diuji end-to-end memakai token Discord/Groq nyata**.
 
 ## Environment
 
@@ -46,6 +47,9 @@ make source-ratio
 | `DISCORD_TOKEN` | Token bot Discord; wajib dan hanya dibaca saat runtime. |
 | `GROQ_API_KEY` | API key Groq; wajib dan hanya dibaca saat runtime. |
 | `BOT_PREFIX` | Prefix command opsional. Jika kosong/tidak disediakan, default runtime adalah `!`. |
+| `CAINE_STATE_FILE` | Path absolut/relatif opsional untuk journal AFK/XP. Jika tidak disediakan, state tetap volatile seperti sebelumnya. |
+
+Bila `CAINE_STATE_FILE` disediakan, bot membuat atau membuka file journal dengan mode `0600`, menolak symlink file akhir, dan memproses hanya record lengkap dengan checksum yang valid. Tail record yang terpotong akibat proses berhenti saat append diabaikan secara aman; journal lengkap tetapi rusak membuat startup gagal agar state tidak dipulihkan secara diam-diam. Journal ini belum melakukan compaction, sehingga operator perlu mengawasi pertumbuhan file pada deployment jangka panjang.
 
 Jangan menyimpan token ke source, image container, commit, atau log. Aktifkan privileged intents yang diperlukan pada aplikasi Discord sebelum deployment; Gateway akan menolak intent privileged yang tidak dikonfigurasi.[1]
 
@@ -56,8 +60,8 @@ Jangan menyimpan token ke source, image container, commit, atau log. Aktifkan pr
 | `!help` | Menampilkan ringkasan command saat ini. |
 | `!status` | Mengonfirmasi jalur Gateway dan REST aktif. |
 | `!reset` | Menjelaskan bahwa reset persistence belum tersedia. |
-| `!afk [alasan]` | Menyimpan AFK volatile untuk guild dan user pengirim. |
-| `!rank` | Mengirim XP volatile pengirim pada guild tersebut. |
+| `!afk [alasan]` | Menyimpan AFK untuk guild dan user pengirim; durable hanya bila `CAINE_STATE_FILE` tersedia. |
+| `!rank` | Mengirim XP pengirim pada guild tersebut; durable hanya bila `CAINE_STATE_FILE` tersedia. |
 | `!summarize <teks>` | Mengirim teks bounded ke Groq dan membalas hasilnya. |
 
 Command yang telah diklasifikasikan tetapi belum memiliki handler membalas status yang eksplisit. Ini disengaja agar bot tidak mengklaim melakukan moderasi atau konfigurasi yang belum benar-benar diimplementasikan.

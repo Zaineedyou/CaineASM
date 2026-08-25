@@ -4,6 +4,13 @@ DEFAULT REL
 global store_set
 global store_get
 global store_delete
+global store_replay_record
+
+global store_set_raw
+global store_delete_raw
+
+extern persist_append_set
+extern persist_append_delete
 
 %define SLOT_COUNT 128
 %define KEY_CAP 96
@@ -17,8 +24,39 @@ global store_delete
 
 section .text
 
-; RDI=key, ESI=key length, RDX=value, ECX=value length. EAX=0 success, -1 invalid/full.
+; RDI=key, ESI=key length, RDX=value, ECX=value length.
+; EAX=0 durable/volatile success, -1 invalid/full, -2 RAM update succeeded
+; but the configured journal append failed. The value remains available in RAM.
 store_set:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    call store_set_raw
+    test eax, eax
+    jnz .out
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r14
+    mov ecx, r15d
+    call persist_append_set
+    test eax, eax
+    jns .out
+    mov eax, -2
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; Internal replay/write path that bypasses the append journal.
+; RDI=key, ESI=key length, RDX=value, ECX=value length. EAX=0 success, -1 invalid/full.
+store_set_raw:
     cmp esi, 0
     je .bad
     cmp esi, KEY_CAP - 1
@@ -102,8 +140,30 @@ store_get:
     add rsp, 8
     ret
 
-; RDI=key, ESI=key length. EAX=0 removed, -1 absent.
+; RDI=key, ESI=key length.
+; EAX=0 durable/volatile delete, -1 absent, -2 RAM delete succeeded but journal failed.
 store_delete:
+    push r12
+    push r13
+    mov r12, rdi
+    mov r13d, esi
+    call store_delete_raw
+    test eax, eax
+    jnz .out
+    mov rdi, r12
+    mov esi, r13d
+    call persist_append_delete
+    test eax, eax
+    jns .out
+    mov eax, -2
+.out:
+    pop r13
+    pop r12
+    ret
+
+; Internal replay/delete path that bypasses the append journal.
+; RDI=key, ESI=key length. EAX=0 removed, -1 absent.
+store_delete_raw:
     sub rsp, 8
     call store_get_slot
     test rax, rax
@@ -115,6 +175,32 @@ store_delete:
 .missing:
     mov eax, -1
     add rsp, 8
+    ret
+
+; Callback for persist_replay. EDI=operation, RSI=key, EDX=key length,
+; RCX=value, R8D=value length. EAX=0 success, -1 invalid operation/state.
+; Replay uses raw paths so a restart never appends duplicate journal records.
+store_replay_record:
+    push rbx
+    cmp edi, 1
+    je .set
+    cmp edi, 2
+    je .delete
+    mov eax, -1
+    jmp .out
+.set:
+    mov rdi, rsi
+    mov esi, edx
+    mov rdx, rcx
+    mov ecx, r8d
+    call store_set_raw
+    jmp .out
+.delete:
+    mov rdi, rsi
+    mov esi, edx
+    call store_delete_raw
+.out:
+    pop rbx
     ret
 
 ; RDI=key, ESI=key length -> RAX slot pointer or zero.

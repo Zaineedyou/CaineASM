@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -15,8 +15,10 @@ DISPATCH_TEST := $(BUILD_DIR)/dispatch-vector
 GATEWAY_TEST := $(BUILD_DIR)/gateway-vector
 GROQ_TEST := $(BUILD_DIR)/groq-vector
 XP_TEST := $(BUILD_DIR)/xp-vector
+PERSIST_TEST := $(BUILD_DIR)/persist-vector
+STATE_REPLAY_TEST := $(BUILD_DIR)/state-replay-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test
 
 all: $(BINARY)
 
@@ -53,6 +55,9 @@ $(BUILD_DIR)/afk.o: src/afk.asm | $(BUILD_DIR)
 $(BUILD_DIR)/xp.o: src/xp.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
+$(BUILD_DIR)/persist.o: src/persist.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
 $(BUILD_DIR)/driver.o: adapter/driver.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CURL_CFLAGS) -c $< -o $@
 
@@ -74,7 +79,7 @@ test-commands: $(COMMAND_TEST)
 $(BUILD_DIR)/store-afk-vector.o: tests/store_afk_vector.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
-$(STORE_AFK_TEST): $(BUILD_DIR)/store-afk-vector.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
+$(STORE_AFK_TEST): $(BUILD_DIR)/store-afk-vector.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/persist.o
 	ld -static -z noexecstack -o $@ $^
 
 test-store-afk: $(STORE_AFK_TEST)
@@ -128,13 +133,31 @@ test-groq: $(GROQ_TEST)
 $(BUILD_DIR)/xp-vector.o: tests/xp_vector.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
-$(XP_TEST): $(BUILD_DIR)/xp-vector.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/store.o
+$(XP_TEST): $(BUILD_DIR)/xp-vector.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/store.o $(BUILD_DIR)/persist.o
 	ld -static -z noexecstack -o $@ $^
 
 test-xp: $(XP_TEST)
 	./$(XP_TEST)
 
-test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp
+$(BUILD_DIR)/persist-vector.o: tests/persist_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(PERSIST_TEST): $(BUILD_DIR)/persist-vector.o $(BUILD_DIR)/persist.o
+	ld -static -z noexecstack -o $@ $^
+
+test-persist: $(PERSIST_TEST)
+	./$(PERSIST_TEST)
+
+$(BUILD_DIR)/state-replay-vector.o: tests/state_replay_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(STATE_REPLAY_TEST): $(BUILD_DIR)/state-replay-vector.o $(BUILD_DIR)/persist.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o
+	ld -static -z noexecstack -o $@ $^
+
+test-state-replay: $(STATE_REPLAY_TEST)
+	./$(STATE_REPLAY_TEST)
+
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay
 
 inspect: $(BINARY)
 	file $(BINARY)
