@@ -11,7 +11,9 @@ extern command_classify
 extern discord_send_text
 extern groq_chat_once
 extern afk_set
+extern afk_clear
 extern xp_increment
+extern xp_get
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -25,6 +27,7 @@ extern bot_prefix_len
 %define CMD_HELP   1
 %define CMD_RESET  2
 %define CMD_AFK    3
+%define CMD_RANK   5
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
 
@@ -132,6 +135,11 @@ dispatch_message_create:
     lea rdx, [author_id]
     mov ecx, [author_id_len]
     call xp_increment
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call afk_clear
 
 .content:
     mov rdi, r12
@@ -209,6 +217,8 @@ dispatch_message_create:
     je .help
     cmp eax, CMD_AFK
     je .afk
+    cmp eax, CMD_RANK
+    je .rank
     cmp eax, CMD_STATUS
     je .status
     cmp eax, CMD_RESET
@@ -267,6 +277,34 @@ dispatch_message_create:
     jnz .afk_error
     lea rdi, [afk_response]
     mov esi, afk_response_len
+    jmp .reply
+.rank:
+    cmp dword [guild_id_len], 0
+    je .rank_unavailable
+    cmp dword [author_id_len], 0
+    je .rank_unavailable
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call xp_get
+    mov [rank_score], eax
+    lea rdi, [rank_response]
+    lea rsi, [rank_prefix]
+    mov edx, rank_prefix_len
+    call copy_bytes
+    lea rdi, [rank_response + rank_prefix_len]
+    mov eax, [rank_score]
+    call format_uint32
+    test eax, eax
+    jle .rank_unavailable
+    add eax, rank_prefix_len
+    mov esi, eax
+    lea rdi, [rank_response]
+    jmp .reply
+.rank_unavailable:
+    lea rdi, [rank_unavailable_response]
+    mov esi, rank_unavailable_response_len
     jmp .reply
 .afk_unavailable:
     lea rdi, [afk_unavailable_response]
@@ -338,6 +376,52 @@ dispatch_message_create:
     ret
 
 ; RDI=content, ESI=content length. EAX=command byte offset, -1 if no valid prefix.
+; RDI=destination, EAX=value. EAX=decimal length.
+format_uint32:
+    lea r8, [rank_scratch + 10]
+    xor ecx, ecx
+    test eax, eax
+    jnz .digits
+    mov byte [rdi], '0'
+    mov eax, 1
+    ret
+.digits:
+    mov r9d, 10
+.loop:
+    xor edx, edx
+    div r9d
+    add dl, '0'
+    dec r8
+    mov [r8], dl
+    inc ecx
+    test eax, eax
+    jnz .loop
+    xor edx, edx
+.copy:
+    cmp edx, ecx
+    jae .done
+    mov al, [r8 + rdx]
+    mov [rdi + rdx], al
+    inc edx
+    jmp .copy
+.done:
+    mov eax, ecx
+    ret
+
+; RDI=destination, RSI=source, EDX=count.
+copy_bytes:
+    xor ecx, ecx
+.copy_loop:
+    cmp ecx, edx
+    jae .copy_done
+    mov al, [rsi + rcx]
+    mov [rdi + rcx], al
+    inc ecx
+    jmp .copy_loop
+.copy_done:
+    ret
+
+; RDI=content, ESI=content length. EAX=command byte offset, -1 if no valid prefix.
 command_offset_after_prefix:
     cmp dword [bot_prefix_len], 0
     je .default_prefix
@@ -403,6 +487,10 @@ afk_unavailable_response: db 'AFK is available only for messages sent in a serve
 afk_unavailable_response_len equ $ - afk_unavailable_response
 afk_error_response: db 'AFK status could not be saved.'
 afk_error_response_len equ $ - afk_error_response
+rank_prefix: db 'Your XP: '
+rank_prefix_len equ $ - rank_prefix
+rank_unavailable_response: db 'Rank is available only for messages sent in a server.'
+rank_unavailable_response_len equ $ - rank_unavailable_response
 default_afk_reason: db 'AFK'
 default_afk_reason_len equ $ - default_afk_reason
 
@@ -412,6 +500,9 @@ guild_id: resb GUILD_ID_CAP
 author_id: resb AUTHOR_ID_CAP
 guild_id_len: resd 1
 author_id_len: resd 1
+rank_score: resd 1
+rank_response: resb 32
+rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP

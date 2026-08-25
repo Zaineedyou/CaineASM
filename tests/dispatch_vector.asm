@@ -8,6 +8,8 @@ global discord_send_text
 global groq_chat_once
 global afk_set
 global xp_increment
+global xp_get
+global afk_clear
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -105,11 +107,11 @@ _start:
     cmp qword [xp_calls], 1
     jne .fail
 
-    ; A known-but-not-yet-implemented command is transparent, not silently handled.
+    ; Rank responds with the current NASM XP total for the message author.
     mov dword [failure_stage], 7
-    lea rax, [registered_notice]
+    lea rax, [rank_response]
     mov [expected_text_ptr], rax
-    mov dword [expected_text_len], registered_notice_len
+    mov dword [expected_text_len], rank_response_len
     lea rdi, [rank_event]
     mov esi, rank_event_len
     call dispatch_message_create
@@ -163,6 +165,15 @@ groq_chat_once:
     ret
 .bad:
     mov eax, -1
+    ret
+
+; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=current score.
+xp_get:
+    mov eax, 42
+    ret
+
+afk_clear:
+    xor eax, eax
     ret
 
 ; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=volatile total.
@@ -302,7 +313,7 @@ unprefixed_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"1234567890
 unprefixed_event_len equ $ - unprefixed_event
 status_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^status","author":{"bot":false}}}'
 status_event_len equ $ - status_event
-rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^rank","author":{"bot":false}}}'
+rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^rank","author":{"id":"user-2","bot":false}}}'
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
 afk_event_len equ $ - afk_event
@@ -326,6 +337,8 @@ help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, l
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
 status_response_len equ $ - status_response
+rank_response: db 'Your XP: 42'
+rank_response_len equ $ - rank_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
 unknown_response: db 'Unknown command. Use !help.'
