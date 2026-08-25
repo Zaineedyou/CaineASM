@@ -6,19 +6,24 @@ global dispatch_message_create
 extern json_find_key
 extern json_read_string
 extern json_value_is_true
+extern json_object_end
 extern command_classify
 extern discord_send_text
 extern groq_chat_once
+extern afk_set
 extern bot_prefix_ptr
 extern bot_prefix_len
 
 %define MESSAGE_CONTENT_CAP 2048
 %define CHANNEL_ID_CAP 64
+%define GUILD_ID_CAP 64
+%define AUTHOR_ID_CAP 64
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
 
 %define CMD_HELP   1
 %define CMD_RESET  2
+%define CMD_AFK    3
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
 
@@ -67,6 +72,58 @@ dispatch_message_create:
     jle .handled
     mov r14d, eax
     mov byte [channel_id + r14], 0
+
+    ; Guild/user identity is optional for generic commands but required by AFK state.
+    mov dword [guild_id_len], 0
+    mov dword [author_id_len], 0
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_guild_id]
+    mov ecx, key_guild_id_len
+    call json_find_key
+    test rax, rax
+    jz .author
+    mov rdi, rax
+    lea rsi, [r12 + r13]
+    lea rdx, [guild_id]
+    mov ecx, GUILD_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .author
+    mov [guild_id_len], eax
+    mov byte [guild_id + rax], 0
+.author:
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_author]
+    mov ecx, key_author_len
+    call json_find_key
+    test rax, rax
+    jz .content
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .content
+    mov r9, rax
+    mov rdi, rbx
+    mov rsi, r9
+    sub rsi, rbx
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_find_key
+    test rax, rax
+    jz .content
+    mov rdi, rax
+    mov rsi, r9
+    lea rdx, [author_id]
+    mov ecx, AUTHOR_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .content
+    mov [author_id_len], eax
+    mov byte [author_id + rax], 0
 
 .content:
     mov rdi, r12
@@ -142,6 +199,8 @@ dispatch_message_create:
     call command_classify
     cmp eax, CMD_HELP
     je .help
+    cmp eax, CMD_AFK
+    je .afk
     cmp eax, CMD_STATUS
     je .status
     cmp eax, CMD_RESET
@@ -156,6 +215,58 @@ dispatch_message_create:
 .help:
     lea rdi, [help_response]
     mov esi, help_response_len
+    jmp .reply
+.afk:
+    cmp dword [guild_id_len], 0
+    je .afk_unavailable
+    cmp dword [author_id_len], 0
+    je .afk_unavailable
+.afk_skip_reason_spaces:
+    cmp ebx, r15d
+    jae .afk_default_reason
+    mov al, [message_content + rbx]
+    cmp al, ' '
+    je .afk_reason_space_advance
+    cmp al, 9
+    je .afk_reason_space_advance
+    jmp .afk_set
+.afk_reason_space_advance:
+    inc ebx
+    jmp .afk_skip_reason_spaces
+.afk_set:
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    lea r8, [message_content + rbx]
+    mov r9d, r15d
+    sub r9d, ebx
+    call afk_set
+    test eax, eax
+    jnz .afk_error
+    lea rdi, [afk_response]
+    mov esi, afk_response_len
+    jmp .reply
+.afk_default_reason:
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    lea r8, [default_afk_reason]
+    mov r9d, default_afk_reason_len
+    call afk_set
+    test eax, eax
+    jnz .afk_error
+    lea rdi, [afk_response]
+    mov esi, afk_response_len
+    jmp .reply
+.afk_unavailable:
+    lea rdi, [afk_unavailable_response]
+    mov esi, afk_unavailable_response_len
+    jmp .reply
+.afk_error:
+    lea rdi, [afk_error_response]
+    mov esi, afk_error_response_len
     jmp .reply
 .status:
     lea rdi, [status_response]
@@ -256,6 +367,12 @@ key_bot: db 'bot'
 key_bot_len equ $ - key_bot
 key_channel_id: db 'channel_id'
 key_channel_id_len equ $ - key_channel_id
+key_guild_id: db 'guild_id'
+key_guild_id_len equ $ - key_guild_id
+key_author: db 'author'
+key_author_len equ $ - key_author
+key_id: db 'id'
+key_id_len equ $ - key_id
 key_content: db 'content'
 key_content_len equ $ - key_content
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
@@ -272,9 +389,21 @@ summarize_usage_response: db 'Usage: !summarize <text>'
 summarize_usage_response_len equ $ - summarize_usage_response
 ai_error_response: db 'AI request failed. Please try again shortly.'
 ai_error_response_len equ $ - ai_error_response
+afk_response: db 'AFK status saved for this server.'
+afk_response_len equ $ - afk_response
+afk_unavailable_response: db 'AFK is available only for messages sent in a server.'
+afk_unavailable_response_len equ $ - afk_unavailable_response
+afk_error_response: db 'AFK status could not be saved.'
+afk_error_response_len equ $ - afk_error_response
+default_afk_reason: db 'AFK'
+default_afk_reason_len equ $ - default_afk_reason
 
 section .bss
 channel_id: resb CHANNEL_ID_CAP
+guild_id: resb GUILD_ID_CAP
+author_id: resb AUTHOR_ID_CAP
+guild_id_len: resd 1
+author_id_len: resd 1
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP

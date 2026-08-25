@@ -6,6 +6,7 @@ extern dispatch_message_create
 global _start
 global discord_send_text
 global groq_chat_once
+global afk_set
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -80,8 +81,23 @@ _start:
     cmp qword [groq_calls], 1
     jne .fail
 
-    ; A known-but-not-yet-implemented command is transparent, not silently handled.
+    ; AFK receives guild, author, and text after the command as bounded state input.
     mov dword [failure_stage], 6
+    lea rax, [afk_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], afk_response_len
+    lea rdi, [afk_event]
+    mov esi, afk_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 4
+    jne .fail
+    cmp qword [afk_calls], 1
+    jne .fail
+
+    ; A known-but-not-yet-implemented command is transparent, not silently handled.
+    mov dword [failure_stage], 7
     lea rax, [registered_notice]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], registered_notice_len
@@ -90,11 +106,11 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 4
+    cmp qword [send_calls], 5
     jne .fail
 
     ; Unknown command gets the bounded default help response.
-    mov dword [failure_stage], 7
+    mov dword [failure_stage], 8
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -103,7 +119,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 5
+    cmp qword [send_calls], 6
     jne .fail
 
     mov eax, SYS_EXIT
@@ -138,6 +154,44 @@ groq_chat_once:
     ret
 .bad:
     mov eax, -1
+    ret
+
+; RDI=guild, ESI=guild length, RDX=user, ECX=user length, R8=reason, R9D=reason length.
+afk_set:
+    push rbx
+    mov rbx, r8
+    mov r10d, ecx
+    mov r11, rdx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r10d, author_id_len
+    jne .bad
+    mov rdi, r11
+    lea rsi, [author_id]
+    mov edx, author_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r9d, afk_reason_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [afk_reason]
+    mov edx, afk_reason_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [afk_calls]
+    xor eax, eax
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
     ret
 
 ; NASM test seam for dispatcher. RDI=channel, ESI=channel len, RDX=text, ECX=text len.
@@ -214,6 +268,16 @@ status_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"12345678901234
 status_event_len equ $ - status_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^rank","author":{"bot":false}}}'
 rank_event_len equ $ - rank_event
+afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
+afk_event_len equ $ - afk_event
+guild_id: db 'guild-1'
+guild_id_len equ $ - guild_id
+author_id: db 'user-2'
+author_id_len equ $ - author_id
+afk_reason: db 'dinner'
+afk_reason_len equ $ - afk_reason
+afk_response: db 'AFK status saved for this server.'
+afk_response_len equ $ - afk_response
 summarize_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^summarize brief this","author":{"bot":false}}}'
 summarize_event_len equ $ - summarize_event
 groq_prompt: db 'brief this'
@@ -238,4 +302,5 @@ expected_text_ptr: dq 0
 expected_text_len: dd 0
 send_calls: dq 0
 groq_calls: dq 0
+afk_calls: dq 0
 failure_stage: dd 0
