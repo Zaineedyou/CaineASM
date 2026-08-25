@@ -2,10 +2,12 @@ BITS 64
 DEFAULT REL
 
 extern discord_send_text
+extern discord_delete_message
 extern json_escape_append
 
 global _start
 global secure_https_post_json
+global secure_https_delete
 global discord_token_ptr
 global discord_token_len
 
@@ -93,6 +95,29 @@ _start:
     cmp qword [mock_calls], 2
     jne .fail
 
+    mov dword [failure_stage], 6
+    mov qword [delete_status], 204
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [message_id]
+    mov ecx, message_id_len
+    call discord_delete_message
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 7
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [invalid_channel]
+    mov ecx, invalid_channel_len
+    call discord_delete_message
+    cmp eax, -1
+    jne .fail
+    cmp qword [delete_calls], 1
+    jne .fail
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -165,6 +190,33 @@ secure_https_post_json:
     pop rbx
     ret
 
+; RDI=url, RSI=authorization, RDX=response, RCX=response cap, R8=status out.
+secure_https_delete:
+    lea r10, [expected_delete_url]
+    mov r11d, expected_delete_url_len
+    call equal_cstring
+    test al, al
+    jz .delete_fail
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jz .delete_fail
+    cmp rcx, 2
+    jb .delete_fail
+    test r8, r8
+    jz .delete_fail
+    mov byte [rdx], 0
+    mov rax, [delete_status]
+    mov [r8], rax
+    inc qword [delete_calls]
+    xor eax, eax
+    ret
+.delete_fail:
+    mov eax, -1
+    ret
+
 ; RDI=C string; R10=expected bytes; R11D=expected len. AL=1 on exact match.
 equal_cstring:
     xor eax, eax
@@ -216,6 +268,10 @@ escaped_text: db 'say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5c, ' L', 0x5c
 escaped_text_len equ $ - escaped_text
 expected_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages'
 expected_url_len equ $ - expected_url
+message_id: db '987654321098765432'
+message_id_len equ $ - message_id
+expected_delete_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/987654321098765432'
+expected_delete_url_len equ $ - expected_delete_url
 expected_authorization: db 'Authorization: Bot token-value'
 expected_authorization_len equ $ - expected_authorization
 expected_body: db '{"content":"say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5c, ' L', 0x5c, 'n', 'T', 0x5c, 't', 'C', 0x5c, 'u0001', '"}'
@@ -228,6 +284,8 @@ discord_token_ptr: dq 0
 discord_token_len: dd 0
 mock_status: dq 0
 mock_calls: dq 0
+delete_calls: dq 0
+delete_status: dq 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 

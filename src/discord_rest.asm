@@ -2,8 +2,10 @@ BITS 64
 DEFAULT REL
 
 global discord_send_text
+global discord_delete_message
 
 extern secure_https_post_json
+extern secure_https_delete
 extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
@@ -114,6 +116,102 @@ discord_send_text:
 .bad:
     mov eax, -1
 .out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=channel ID, ESI=channel length, RDX=message ID, ECX=message length.
+; EAX=0 only for Discord HTTP 2xx. Authorization and route construction stay NASM-owned.
+discord_delete_message:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r13d, r13d
+    jz .delete_bad
+    test r15d, r15d
+    jz .delete_bad
+    cmp r13d, 64
+    ja .delete_bad
+    cmp r15d, 64
+    ja .delete_bad
+    cmp dword [discord_token_len], 0
+    je .delete_bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .delete_bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .delete_bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .delete_bad
+    lea rdi, [request_url]
+    lea rsi, [url_prefix]
+    mov edx, url_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + url_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + url_prefix_len]
+    add rdi, r13
+    lea rsi, [url_suffix]
+    mov edx, url_suffix_len
+    call copy_bytes
+    lea rdi, [request_url + url_prefix_len]
+    add rdi, r13
+    add rdi, url_suffix_len
+    mov byte [rdi], '/'
+    inc rdi
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url + url_prefix_len]
+    add rdi, r13
+    add rdi, url_suffix_len + 1
+    add rdi, r15
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [response_body]
+    mov ecx, RESPONSE_BODY_CAP
+    lea r8, [response_status]
+    call secure_https_delete
+    test rax, rax
+    js .delete_bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .delete_bad
+    cmp rax, 300
+    jae .delete_bad
+    xor eax, eax
+    jmp .delete_out
+.delete_bad:
+    mov eax, -1
+.delete_out:
     pop r15
     pop r14
     pop r13
