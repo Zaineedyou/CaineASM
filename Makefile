@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -11,8 +11,10 @@ COMMAND_TEST := $(BUILD_DIR)/commands-vector
 STORE_AFK_TEST := $(BUILD_DIR)/store-afk-vector
 REST_TEST := $(BUILD_DIR)/discord-rest-vector
 JSON_TEST := $(BUILD_DIR)/json-vector
+DISPATCH_TEST := $(BUILD_DIR)/dispatch-vector
+GATEWAY_TEST := $(BUILD_DIR)/gateway-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test
 
 all: $(BINARY)
 
@@ -32,6 +34,9 @@ $(BUILD_DIR)/json.o: src/json.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/discord_rest.o: src/discord_rest.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/dispatch.o: src/dispatch.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/store.o: src/store.asm | $(BUILD_DIR)
@@ -85,7 +90,25 @@ $(JSON_TEST): $(BUILD_DIR)/json-vector.o $(BUILD_DIR)/json.o
 test-json: $(JSON_TEST)
 	./$(JSON_TEST)
 
-test: test-commands test-store-afk test-rest test-json
+$(BUILD_DIR)/dispatch-vector.o: tests/dispatch_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(DISPATCH_TEST): $(BUILD_DIR)/dispatch-vector.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-dispatch: $(DISPATCH_TEST)
+	./$(DISPATCH_TEST)
+
+$(BUILD_DIR)/gateway-vector.o: tests/gateway_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(GATEWAY_TEST): $(BUILD_DIR)/gateway-vector.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-gateway: $(GATEWAY_TEST)
+	./$(GATEWAY_TEST)
+
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway
 
 inspect: $(BINARY)
 	file $(BINARY)
