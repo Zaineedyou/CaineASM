@@ -60,7 +60,7 @@ $(BUILD_DIR)/secure_transport.o: adapter/secure_transport.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(CURL_CFLAGS) -c $< -o $@
 
 $(BINARY): $(ASM_OBJECTS) $(ADAPTER_OBJECTS)
-	$(CC) -no-pie -Wl,-z,noexecstack -o $@ $^ $(CURL_LIBS)
+	$(CC) -no-pie -Wl,-z,relro,-z,now,-z,noexecstack -o $@ $^ $(CURL_LIBS)
 
 $(BUILD_DIR)/commands-vector.o: tests/commands_vector.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
