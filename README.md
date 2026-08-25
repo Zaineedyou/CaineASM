@@ -22,7 +22,7 @@ Gateway NASM menerima Hello, mengirim Identify, menyimpan sequence Dispatch, men
 | AFK | Set AFK per guild/user dan clear otomatis saat pengguna berikutnya mengirim pesan; state masih volatile |
 | XP/rank | Increment XP per pesan guild dan `rank`; state masih volatile |
 | Groq AI | `summarize <text>` membuat Chat Completion non-streaming melalui HTTPS dan parser respons NASM |
-| REST Discord | Pengiriman pesan JSON escaped melalui endpoint channel messages |
+| REST Discord | Pengiriman pesan JSON escaped serta route DELETE message yang tervalidasi; policy moderasi belum diaktifkan |
 | Moderasi, leaderboard, welcome/goodbye, autorole, interactions, history multi-turn | Belum diimplementasikan |
 | Persistence disk/database | Belum diimplementasikan; restart menghapus AFK/XP/state |
 
