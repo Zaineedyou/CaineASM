@@ -2,14 +2,16 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
 CURL_LIBS := $(shell pkg-config --libs libcurl)
 COMMAND_TEST := $(BUILD_DIR)/commands-vector
+STORE_AFK_TEST := $(BUILD_DIR)/store-afk-vector
+REST_TEST := $(BUILD_DIR)/discord-rest-vector
 
-.PHONY: all clean inspect source-ratio test-commands
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test
 
 all: $(BINARY)
 
@@ -23,6 +25,9 @@ $(BUILD_DIR)/gateway.o: src/gateway.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/commands.o: src/commands.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/json.o: src/json.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/discord_rest.o: src/discord_rest.asm | $(BUILD_DIR)
@@ -51,6 +56,26 @@ $(COMMAND_TEST): $(BUILD_DIR)/commands-vector.o $(BUILD_DIR)/commands.o
 
 test-commands: $(COMMAND_TEST)
 	./$(COMMAND_TEST)
+
+$(BUILD_DIR)/store-afk-vector.o: tests/store_afk_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(STORE_AFK_TEST): $(BUILD_DIR)/store-afk-vector.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o
+	ld -static -z noexecstack -o $@ $^
+
+test-store-afk: $(STORE_AFK_TEST)
+	./$(STORE_AFK_TEST)
+
+$(BUILD_DIR)/discord-rest-vector.o: tests/discord_rest_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(REST_TEST): $(BUILD_DIR)/discord-rest-vector.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-rest: $(REST_TEST)
+	./$(REST_TEST)
+
+test: test-commands test-store-afk test-rest
 
 inspect: $(BINARY)
 	file $(BINARY)

@@ -4,8 +4,15 @@ DEFAULT REL
 global discord_send_text
 
 extern secure_https_post_json
+extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
+
+%define REQUEST_URL_CAP 256
+%define AUTHORIZATION_CAP 512
+%define JSON_BODY_CAP 12288
+%define RESPONSE_BODY_CAP 4096
+%define DISCORD_TEXT_MAX 2000
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -25,10 +32,19 @@ discord_send_text:
     jz .bad
     cmp r13d, 64
     ja .bad
-    cmp r15d, 1900
+    cmp r15d, DISCORD_TEXT_MAX
     ja .bad
     cmp dword [discord_token_len], 0
     je .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
 
     ; URL: https://discord.com/api/v10/channels/<id>/messages
     lea rdi, [request_url]
@@ -57,46 +73,37 @@ discord_send_text:
     call copy_bytes
     mov byte [rdi + rdx], 0
 
-    ; Strict JSON text subset: refuse control chars, quote and slash until full
-    ; JSON escape logic is reached. This keeps the request injection-safe.
+    ; JSON: {"content":"<fully escaped text>"}
     lea rdi, [json_body]
     lea rsi, [json_prefix]
     mov edx, json_prefix_len
     call copy_bytes
-    xor ebx, ebx
-.text:
-    cmp ebx, r15d
-    jae .text_done
-    mov al, [r14 + rbx]
-    cmp al, 0x20
-    jb .bad
-    cmp al, '"'
-    je .bad
-    cmp al, 0x5c
-    je .bad
-    mov [json_body + json_prefix_len + rbx], al
-    inc ebx
-    jmp .text
-.text_done:
     lea rdi, [json_body + json_prefix_len]
-    add rdi, r15
+    mov esi, JSON_BODY_CAP - json_prefix_len - json_suffix_len
+    mov rdx, r14
+    mov ecx, r15d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    lea rdi, [json_body + json_prefix_len]
+    add rdi, rbx
     lea rsi, [json_suffix]
     mov edx, json_suffix_len
     call copy_bytes
-    mov rax, r15
-    add rax, json_prefix_len + json_suffix_len
+    mov eax, ebx
+    add eax, json_prefix_len + json_suffix_len
+    mov byte [json_body + rax], 0
 
     lea rdi, [request_url]
     lea rsi, [authorization]
     lea rdx, [json_body]
-    mov rcx, rax
+    mov ecx, eax
     lea r8, [response_body]
-    mov r9, 4096
+    mov r9, RESPONSE_BODY_CAP
     call call_secure_post
     test rax, rax
     js .bad
-    ; The C ABI status pointer is passed as seventh argument on the stack.
-    ; The response status lives in response_status after the wrapper below.
     mov rax, [response_status]
     cmp rax, 200
     jb .bad
@@ -116,15 +123,35 @@ discord_send_text:
 
 ; Wrapper maintains System V stack arguments for `long *status_out` (argument 7).
 ; RDI URL, RSI auth, RDX body, RCX length, R8 response, R9 capacity.
-; RAX=status return.
+; RAX=transport return.
 call_secure_post:
     sub rsp, 8
     lea rax, [response_status]
-    push rax
+    mov [rsp], rax
     call secure_https_post_json
-    add rsp, 16
+    add rsp, 8
     ret
 
+; RDI=identifier bytes, ESI=length. AL=1 when the identifier contains only ASCII digits.
+is_decimal_identifier:
+    xor edx, edx
+.loop:
+    cmp edx, esi
+    jae .yes
+    mov al, [rdi + rdx]
+    sub al, '0'
+    cmp al, 9
+    ja .no
+    inc edx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=destination, RSI=source, EDX=count.
 copy_bytes:
     xor ecx, ecx
 .loop:
@@ -153,7 +180,7 @@ section .data
 response_status: dq 0
 
 section .bss
-request_url: resb 256
-authorization: resb 512
-json_body: resb 2048
-response_body: resb 4096
+request_url: resb REQUEST_URL_CAP
+authorization: resb AUTHORIZATION_CAP
+json_body: resb JSON_BODY_CAP
+response_body: resb RESPONSE_BODY_CAP

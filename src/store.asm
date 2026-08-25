@@ -25,33 +25,40 @@ store_set:
     ja .bad
     cmp ecx, VALUE_CAP - 1
     ja .bad
+    push rbx
     push r12
     push r13
+    push r14
+    push r15
     mov r12, rdi
     mov r13, rdx
-    mov r8d, esi
-    mov r9d, ecx
+    mov r14d, esi
+    mov r15d, ecx
     call find_or_empty_slot
     test rax, rax
     jz .out_bad
     mov byte [rax], 1
-    mov [rax + 4], r8d
-    mov [rax + 8], r9d
-    lea rdi, [rax + 16]
+    mov [rax + 4], r14d
+    mov [rax + 8], r15d
+    mov rbx, rax
+    lea rdi, [rbx + 16]
     mov rsi, r12
-    mov edx, r8d
+    mov edx, r14d
     call copy_bytes
-    lea rdi, [rax + 16 + KEY_CAP]
+    lea rdi, [rbx + 16 + KEY_CAP]
     mov rsi, r13
-    mov edx, r9d
+    mov edx, r15d
     call copy_bytes
     xor eax, eax
     jmp .out
 .out_bad:
     mov eax, -1
 .out:
+    pop r15
+    pop r14
     pop r13
     pop r12
+    pop rbx
     ret
 .bad:
     mov eax, -1
@@ -59,100 +66,116 @@ store_set:
 
 ; RDI=key, ESI=key length. RAX=value pointer or zero. EDX=value length if found.
 store_get:
+    sub rsp, 8
     cmp esi, 0
     je .missing
+    cmp esi, KEY_CAP - 1
+    ja .missing
     mov r8d, esi
-    xor ecx, ecx
+    mov r11, rdi
+    xor r10d, r10d
 .loop:
-    cmp ecx, SLOT_COUNT
+    cmp r10d, SLOT_COUNT
     jae .missing
-    imul rax, rcx, SLOT_SIZE
+    imul rax, r10, SLOT_SIZE
     lea r9, [store_slots + rax]
     cmp byte [r9], 1
     jne .next
     cmp [r9 + 4], r8d
     jne .next
-    lea rsi, [r9 + 16]
+    lea rdi, [r9 + 16]
+    mov rsi, r11
     mov edx, r8d
-    push rdi
     call equal_bytes
-    pop rdi
     test al, al
     jz .next
     lea rax, [r9 + 16 + KEY_CAP]
     mov edx, [r9 + 8]
+    add rsp, 8
     ret
 .next:
-    inc ecx
+    inc r10d
     jmp .loop
 .missing:
     xor eax, eax
     xor edx, edx
+    add rsp, 8
     ret
 
 ; RDI=key, ESI=key length. EAX=0 removed, -1 absent.
 store_delete:
+    sub rsp, 8
     call store_get_slot
     test rax, rax
     jz .missing
     mov byte [rax], 0
     xor eax, eax
+    add rsp, 8
     ret
 .missing:
     mov eax, -1
+    add rsp, 8
     ret
 
 ; RDI=key, ESI=key length -> RAX slot pointer or zero.
 store_get_slot:
+    sub rsp, 8
+    cmp esi, 0
+    je .missing
+    cmp esi, KEY_CAP - 1
+    ja .missing
     mov r8d, esi
-    xor ecx, ecx
+    mov r11, rdi
+    xor r10d, r10d
 .loop:
-    cmp ecx, SLOT_COUNT
+    cmp r10d, SLOT_COUNT
     jae .missing
-    imul rax, rcx, SLOT_SIZE
+    imul rax, r10, SLOT_SIZE
     lea r9, [store_slots + rax]
     cmp byte [r9], 1
     jne .next
     cmp [r9 + 4], r8d
     jne .next
-    lea rsi, [r9 + 16]
+    lea rdi, [r9 + 16]
+    mov rsi, r11
     mov edx, r8d
-    push rdi
     call equal_bytes
-    pop rdi
     test al, al
     jnz .found
 .next:
-    inc ecx
+    inc r10d
     jmp .loop
 .found:
     mov rax, r9
+    add rsp, 8
     ret
 .missing:
     xor eax, eax
+    add rsp, 8
     ret
 
-; Finds an existing matching slot or first unused slot. R12 key; R8d key length.
+; Finds an existing matching slot or first unused slot. R12 key; R14D key length.
 find_or_empty_slot:
-    xor ecx, ecx
+    sub rsp, 8
+    xor r9d, r9d
     xor r10d, r10d
 .loop:
-    cmp ecx, SLOT_COUNT
+    cmp r9d, SLOT_COUNT
     jae .finish
-    imul rax, rcx, SLOT_SIZE
+    imul rax, r9, SLOT_SIZE
     lea r11, [store_slots + rax]
     cmp byte [r11], 1
     jne .empty
-    cmp [r11 + 4], r8d
+    cmp [r11 + 4], r14d
     jne .next
     lea rdi, [r11 + 16]
     mov rsi, r12
-    mov edx, r8d
+    mov edx, r14d
     call equal_bytes
     test al, al
     jnz .found
 .next:
-    inc ecx
+    inc r9d
     jmp .loop
 .empty:
     test r10, r10
@@ -161,9 +184,11 @@ find_or_empty_slot:
     jmp .next
 .finish:
     mov rax, r10
+    add rsp, 8
     ret
 .found:
     mov rax, r11
+    add rsp, 8
     ret
 
 ; RDI=destination, RSI=source, EDX=count.
