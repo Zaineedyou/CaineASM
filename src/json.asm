@@ -6,6 +6,7 @@ global json_find_key
 global json_read_uint
 global json_read_string
 global json_value_is_true
+global json_object_end
 
 ; RDI=destination, ESI=destination capacity, RDX=source, ECX=source length.
 ; RAX=escaped byte length, or -1 when the bounded destination is insufficient.
@@ -394,6 +395,54 @@ json_hex_nibble:
 .bad:
     xor eax, eax
     stc
+    ret
+
+; RDI=opening object brace, RSI=exclusive input end. RAX=first byte after the
+; matching closing brace, or zero for malformed/truncated input. JSON strings
+; and escapes are skipped so braces inside a string do not alter object depth.
+json_object_end:
+    cmp rdi, rsi
+    jae .bad
+    cmp byte [rdi], '{'
+    jne .bad
+    xor r8d, r8d
+.loop:
+    cmp rdi, rsi
+    jae .bad
+    mov al, [rdi]
+    inc rdi
+    cmp al, '"'
+    je .string
+    cmp al, '{'
+    je .open
+    cmp al, '}'
+    je .close
+    jmp .loop
+.open:
+    inc r8d
+    jmp .loop
+.close:
+    dec r8d
+    jnz .loop
+    mov rax, rdi
+    ret
+.string:
+    cmp rdi, rsi
+    jae .bad
+    mov al, [rdi]
+    inc rdi
+    cmp al, 0x5c
+    je .escaped
+    cmp al, '"'
+    je .loop
+    jmp .string
+.escaped:
+    cmp rdi, rsi
+    jae .bad
+    inc rdi
+    jmp .string
+.bad:
+    xor eax, eax
     ret
 
 ; RDI=value start, RSI=exclusive input end. AL=1 only for the literal `true`.

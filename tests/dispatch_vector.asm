@@ -5,6 +5,7 @@ extern dispatch_message_create
 
 global _start
 global discord_send_text
+global groq_chat_once
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -64,8 +65,23 @@ _start:
     cmp qword [send_calls], 2
     jne .fail
 
-    ; A known-but-not-yet-implemented command is transparent, not silently handled.
+    ; Summarize forwards only text after the command to the NASM Groq client.
     mov dword [failure_stage], 5
+    lea rax, [ai_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_response_len
+    lea rdi, [summarize_event]
+    mov esi, summarize_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 3
+    jne .fail
+    cmp qword [groq_calls], 1
+    jne .fail
+
+    ; A known-but-not-yet-implemented command is transparent, not silently handled.
+    mov dword [failure_stage], 6
     lea rax, [registered_notice]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], registered_notice_len
@@ -74,11 +90,11 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 3
+    cmp qword [send_calls], 4
     jne .fail
 
     ; Unknown command gets the bounded default help response.
-    mov dword [failure_stage], 6
+    mov dword [failure_stage], 7
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -87,7 +103,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 4
+    cmp qword [send_calls], 5
     jne .fail
 
     mov eax, SYS_EXIT
@@ -97,6 +113,32 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
+groq_chat_once:
+    mov r10, rdx
+    mov r11d, ecx
+    cmp esi, groq_prompt_len
+    jne .bad
+    lea r8, [groq_prompt]
+    mov r9d, esi
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r11d, ai_response_len + 1
+    jb .bad
+    mov rdi, r10
+    lea rsi, [ai_response]
+    mov edx, ai_response_len
+    call copy_bytes
+    inc qword [groq_calls]
+    mov eax, ai_response_len
+    ret
+.bad:
+    mov eax, -1
+    ret
 
 ; NASM test seam for dispatcher. RDI=channel, ESI=channel len, RDX=text, ECX=text len.
 discord_send_text:
@@ -124,6 +166,19 @@ discord_send_text:
     ret
 .bad:
     mov eax, -1
+    ret
+
+; RDI=destination, RSI=source, EDX=count.
+copy_bytes:
+    xor ecx, ecx
+.copy_loop:
+    cmp ecx, edx
+    jae .copy_done
+    mov al, [rsi + rcx]
+    mov [rdi + rcx], al
+    inc ecx
+    jmp .copy_loop
+.copy_done:
     ret
 
 ; RDI and RSI buffers, EDX count. AL=1 when equal.
@@ -159,6 +214,12 @@ status_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"12345678901234
 status_event_len equ $ - status_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^rank","author":{"bot":false}}}'
 rank_event_len equ $ - rank_event
+summarize_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^summarize brief this","author":{"bot":false}}}'
+summarize_event_len equ $ - summarize_event
+groq_prompt: db 'brief this'
+groq_prompt_len equ $ - groq_prompt
+ai_response: db 'AI summary'
+ai_response_len equ $ - ai_response
 unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^nonesuch","author":{"bot":false}}}'
 unknown_event_len equ $ - unknown_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
@@ -176,4 +237,5 @@ bot_prefix_len: dd 0
 expected_text_ptr: dq 0
 expected_text_len: dd 0
 send_calls: dq 0
+groq_calls: dq 0
 failure_stage: dd 0

@@ -5,6 +5,7 @@ extern json_find_key
 extern json_read_uint
 extern json_read_string
 extern json_value_is_true
+extern json_object_end
 
 global _start
 
@@ -127,6 +128,20 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 7
+    ; Object scanning stops exactly at the matching brace and ignores string bytes.
+    lea rdi, [object_with_brace_string]
+    lea rsi, [object_with_brace_string + object_with_brace_string_len]
+    call json_object_end
+    lea rdx, [object_with_brace_string + object_with_brace_string_len]
+    cmp rax, rdx
+    jne .fail
+    lea rdi, [truncated_object]
+    lea rsi, [truncated_object + truncated_object_len]
+    call json_object_end
+    test rax, rax
+    jnz .fail
+
+    mov dword [failure_stage], 8
     ; A missing key is zero, never an unbounded scan result.
     lea rdi, [gateway_frame]
     mov esi, gateway_frame_len
@@ -186,6 +201,10 @@ uint64_overflow: db '18446744073709551616'
 uint64_overflow_len equ $ - uint64_overflow
 surrogate_string: db '"', 0x5c, 'uD800', '"'
 surrogate_string_len equ $ - surrogate_string
+object_with_brace_string: db '{"text":"{not an object}","nested":{"ok":true}}'
+object_with_brace_string_len equ $ - object_with_brace_string
+truncated_object: db '{"text":"open"'
+truncated_object_len equ $ - truncated_object
 
 section .data
 failure_stage: dd 0

@@ -8,16 +8,19 @@ extern json_read_string
 extern json_value_is_true
 extern command_classify
 extern discord_send_text
+extern groq_chat_once
 extern bot_prefix_ptr
 extern bot_prefix_len
 
 %define MESSAGE_CONTENT_CAP 2048
 %define CHANNEL_ID_CAP 64
 %define COMMAND_CAP 64
+%define AI_REPLY_CAP 1901
 
 %define CMD_HELP   1
 %define CMD_RESET  2
 %define CMD_STATUS 7
+%define CMD_SUMMARIZE 8
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -133,6 +136,7 @@ dispatch_message_create:
 .classify:
     test ecx, ecx
     jz .handled
+    add ebx, ecx                     ; first byte after command token
     lea rdi, [command_buffer]
     mov esi, ecx
     call command_classify
@@ -142,6 +146,8 @@ dispatch_message_create:
     je .status
     cmp eax, CMD_RESET
     je .reset
+    cmp eax, CMD_SUMMARIZE
+    je .summarize
     test eax, eax
     jz .unknown
     lea rdi, [registered_notice]
@@ -158,6 +164,39 @@ dispatch_message_create:
 .reset:
     lea rdi, [reset_response]
     mov esi, reset_response_len
+    jmp .reply
+.summarize:
+.skip_prompt_spaces:
+    cmp ebx, r15d
+    jae .summarize_usage
+    mov al, [message_content + rbx]
+    cmp al, ' '
+    je .prompt_space_advance
+    cmp al, 9
+    je .prompt_space_advance
+    jmp .ask_groq
+.prompt_space_advance:
+    inc ebx
+    jmp .skip_prompt_spaces
+.ask_groq:
+    lea rdi, [message_content + rbx]
+    mov esi, r15d
+    sub esi, ebx
+    lea rdx, [ai_reply]
+    mov ecx, AI_REPLY_CAP
+    call groq_chat_once
+    test eax, eax
+    jle .ai_error
+    lea rdi, [ai_reply]
+    mov esi, eax
+    jmp .reply
+.summarize_usage:
+    lea rdi, [summarize_usage_response]
+    mov esi, summarize_usage_response_len
+    jmp .reply
+.ai_error:
+    lea rdi, [ai_error_response]
+    mov esi, ai_error_response_len
     jmp .reply
 .unknown:
     lea rdi, [unknown_response]
@@ -229,8 +268,13 @@ registered_notice: db 'That command is registered, but its handler is not active
 registered_notice_len equ $ - registered_notice
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
+summarize_usage_response: db 'Usage: !summarize <text>'
+summarize_usage_response_len equ $ - summarize_usage_response
+ai_error_response: db 'AI request failed. Please try again shortly.'
+ai_error_response_len equ $ - ai_error_response
 
 section .bss
 channel_id: resb CHANNEL_ID_CAP
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
+ai_reply: resb AI_REPLY_CAP
