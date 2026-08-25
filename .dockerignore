@@ -1,0 +1,12 @@
+.git
+build
+.env
+.env.*
+*.log
+*.core
+core
+README.md
+docs
+Dockerfile
+.dockerignore
+tests

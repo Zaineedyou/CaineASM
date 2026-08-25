@@ -1,44 +1,77 @@
 # CaineASM
 
-Port **assembly-dominan** dari CaineGO untuk Discord. Repositori ini secara sengaja **tidak memiliki bridge Minecraft–Discord**: tidak ada WebSocket Minecraft, `BRIDGE_TOKEN`, `BRIDGE_PORT`, `setbridge`, `bridgestatus`, maupun `bridge_channel`.
+**CaineASM** adalah port Discord bot CaineGO yang dominan NASM untuk Linux x86-64. Repositori ini sengaja **menghapus seluruh fitur bridge Minecraft–Discord**. Tidak ada runtime Minecraft, endpoint bridge, token bridge, relay chat, maupun command konfigurasi bridge.
 
-| Komponen | Implementasi |
+| Batas tanggung jawab | Implementasi |
 |---|---|
-| Lifecycle bot, parsing environment, Gateway opcode/Hello/Identify/heartbeat, routing command, policy command | NASM x86-64 Linux |
-| TLS, CA chain, hostname verification, DNS, HTTPS dan WSS frame transport | Adapter C kecil menggunakan libcurl |
-| Go, discordgo, gorilla/websocket, database ORM | Tidak digunakan |
+| Lifecycle proses, environment, Gateway state machine, JSON bounded, command policy, AFK, XP, dan payload aplikasi | **NASM x86-64** |
+| TLS, CA certificate chain, hostname verification, DNS, HTTPS, dan WSS frame transport | Adapter C/libcurl yang kecil |
+| Go, discordgo, ORM, database client, dan runtime Minecraft | Tidak digunakan |
 
-> Adapter C tidak mengambil keputusan bot. Ia hanya membuka transport terenkripsi dan tervalidasi; state machine Discord serta seluruh policy bot tetap di NASM.
+> Adapter C tidak membuat keputusan bot atau mem-parsing JSON Discord/Groq. Ia hanya menyediakan transport terenkripsi dengan verifikasi TLS aktif.
 
-## Status checkpoint
+## Status implementasi
 
-Checkpoint awal sudah memiliki bootstrap NASM, konfigurasi token, koneksi WSS Discord Gateway, parser `Hello`, Identify, heartbeat dasar, reconnect dasar, dan router command non-bridge. Router menguji bahwa `setbridge` dan `bridgestatus` sengaja menghasilkan command tidak dikenal.
+Gateway NASM menerima Hello, mengirim Identify, menyimpan sequence Dispatch, mengatur heartbeat dengan jitter awal, mengecek ACK, memproses READY, menyimpan informasi Resume, serta menangani Reconnect dan Invalid Session. Implementasi mengikuti siklus resmi Discord untuk payload Gateway, heartbeat, sequence, dan resume.[1]
 
-Fitur CaineGO yang sedang dipindahkan selanjutnya mencakup dispatch `MESSAGE_CREATE`, payload Groq, storage history/XP/AFK, moderation REST, welcome/goodbye, role otomatis, dan interactions. Tidak ada logic Minecraft yang akan ditambahkan kembali.
+| Fitur | Status saat ini |
+|---|---|
+| Gateway WSS, Hello, Identify, ACK heartbeat, sequence, READY, Resume | Diimplementasikan dan diuji dengan mock transport NASM |
+| Dispatch `MESSAGE_CREATE` | Diimplementasikan untuk filter bot, prefix, command, dan REST reply |
+| Command dasar | `help`, `status`, `reset`, `afk`, `rank`, dan `summarize` aktif |
+| AFK | Set AFK per guild/user dan clear otomatis saat pengguna berikutnya mengirim pesan; state masih volatile |
+| XP/rank | Increment XP per pesan guild dan `rank`; state masih volatile |
+| Groq AI | `summarize <text>` membuat Chat Completion non-streaming melalui HTTPS dan parser respons NASM |
+| REST Discord | Pengiriman pesan JSON escaped melalui endpoint channel messages |
+| Moderasi, leaderboard, welcome/goodbye, autorole, interactions, history multi-turn | Belum diimplementasikan |
+| Persistence disk/database | Belum diimplementasikan; restart menghapus AFK/XP/state |
 
-## Build lokal
+Klien Groq membuat request ke endpoint Chat Completions dengan header Bearer, model, dan messages, lalu mengambil `choices[0].message.content` dari respons.[2] Payload user, token Discord di Identify, dan teks reply di-escape sebagai string JSON bounded sebelum dikirim.
+
+## Build dan test lokal
 
 ```bash
 sudo apt-get install -y nasm build-essential pkg-config libcurl4-openssl-dev
 make all
-make test-commands
+make test
 make source-ratio
 ```
+
+`make test` menjalankan vector test NASM untuk router command, store/AFK, REST Discord, parser JSON, dispatcher, Gateway, Groq, dan XP. Checkpoint saat ini tervalidasi secara lokal dengan mock deterministik; **belum diuji end-to-end memakai token Discord/Groq nyata**.
 
 ## Environment
 
 | Variabel | Kegunaan |
 |---|---|
-| `DISCORD_TOKEN` | Token aplikasi bot Discord. |
-| `GROQ_API_KEY` | Kunci Groq untuk AI chat. |
-| `BOT_PREFIX` | Prefix command; default handling akan mengikuti `Caine`. |
+| `DISCORD_TOKEN` | Token bot Discord; wajib dan hanya dibaca saat runtime. |
+| `GROQ_API_KEY` | API key Groq; wajib dan hanya dibaca saat runtime. |
+| `BOT_PREFIX` | Prefix command opsional. Jika kosong/tidak disediakan, default runtime adalah `!`. |
 
-## Container
+Jangan menyimpan token ke source, image container, commit, atau log. Aktifkan privileged intents yang diperlukan pada aplikasi Discord sebelum deployment; Gateway akan menolak intent privileged yang tidak dikonfigurasi.[1]
 
-`Dockerfile` membangun NASM dan adapter C/libcurl langsung. Image deploy tidak memuat Go atau runtime Minecraft. TLS tetap menggunakan certificate dan hostname verification aktif melalui libcurl.
+## Perilaku command saat ini
+
+| Command | Perilaku |
+|---|---|
+| `!help` | Menampilkan ringkasan command saat ini. |
+| `!status` | Mengonfirmasi jalur Gateway dan REST aktif. |
+| `!reset` | Menjelaskan bahwa reset persistence belum tersedia. |
+| `!afk [alasan]` | Menyimpan AFK volatile untuk guild dan user pengirim. |
+| `!rank` | Mengirim XP volatile pengirim pada guild tersebut. |
+| `!summarize <teks>` | Mengirim teks bounded ke Groq dan membalas hasilnya. |
+
+Command yang telah diklasifikasikan tetapi belum memiliki handler membalas status yang eksplisit. Ini disengaja agar bot tidak mengklaim melakukan moderasi atau konfigurasi yang belum benar-benar diimplementasikan.
+
+## Container dan deployment
+
+`Dockerfile` membangun NASM dan adapter libcurl langsung. Image deploy tidak memuat Go atau runtime Minecraft. Verifikasi peer dan hostname TLS libcurl tetap aktif untuk HTTPS dan WSS.
+
+Bot WebSocket perlu dijalankan sebagai proses yang tetap hidup pada host deployment. Sandbox pengembangan ini tidak dimaksudkan sebagai host produksi jangka panjang. Sebelum deploy, sediakan `DISCORD_TOKEN` dan `GROQ_API_KEY` sebagai environment secret platform, lalu jalankan `make test` dan build image tanpa memasukkan secret.
 
 ## Referensi
 
-- [Discord Gateway documentation](https://docs.discord.com/developers/events/gateway)
-- [Groq Chat Completions API](https://console.groq.com/docs/api-reference)
-- [libcurl WebSocket interface](https://curl.se/libcurl/c/libcurl-ws.html)
+[1] [Discord Gateway Documentation](https://docs.discord.com/developers/events/gateway)
+
+[2] [Groq API Reference — Create Chat Completion](https://console.groq.com/docs/api-reference)
+
+[3] [libcurl WebSocket Interface](https://curl.se/libcurl/c/libcurl-ws.html)
