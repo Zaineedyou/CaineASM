@@ -6,6 +6,7 @@ extern discord_delete_message
 extern discord_get_json
 extern discord_unban_member
 extern discord_kick_member
+extern discord_ban_member
 extern discord_add_member_role
 extern json_escape_append
 
@@ -14,6 +15,7 @@ global secure_https_post_json
 global secure_https_delete
 global secure_https_get
 global secure_https_put_empty
+global secure_https_put_json
 global discord_token_ptr
 global discord_token_len
 
@@ -159,6 +161,18 @@ _start:
     lea rax, [expected_unban_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_unban_url_len
+
+    mov dword [failure_stage], 756
+    mov qword [put_status], 204
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    call discord_ban_member
+    test eax, eax
+    jnz .fail
+    cmp qword [put_json_calls], 1
+    jne .fail
 
     mov dword [failure_stage], 76
     mov qword [delete_status], 403
@@ -382,6 +396,66 @@ secure_https_get:
     pop rbx
     ret
 
+; RDI=url, RSI=authorization, RDX=JSON body, RCX=len, R8=response, R9=cap,
+; [RSP+8]=status out.
+secure_https_put_json:
+    mov [put_json_body_ptr], rdx
+    lea r10, [expected_unban_url]
+    mov r11d, expected_unban_url_len
+    call equal_cstring
+    test al, al
+    jnz .put_json_url_ok
+    mov dword [failure_stage], 758
+    jmp .put_json_fail
+.put_json_url_ok:
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jnz .put_json_auth_ok
+    mov dword [failure_stage], 759
+    jmp .put_json_fail
+.put_json_auth_ok:
+    cmp ecx, ban_body_len
+    je .put_json_body_len_ok
+    mov dword [failure_stage], 760
+    jmp .put_json_fail
+.put_json_body_len_ok:
+    mov rdi, [put_json_body_ptr]
+    lea rsi, [ban_body]
+    mov edx, ban_body_len
+    call equal_bytes
+    test al, al
+    jnz .put_json_body_ok
+    mov dword [failure_stage], 761
+    jmp .put_json_fail
+.put_json_body_ok:
+    cmp r9d, 2
+    jae .put_json_cap_ok
+    mov dword [failure_stage], 762
+    jmp .put_json_fail
+.put_json_cap_ok:
+    mov r10, [rsp + 8]
+    test r10, r10
+    jnz .put_json_status_ok
+    mov dword [failure_stage], 763
+    jmp .put_json_fail
+.put_json_status_ok:
+    mov byte [r8], 0
+    mov rax, [put_status]
+    mov [r10], rax
+    inc qword [put_json_calls]
+    xor eax, eax
+    ret
+.put_json_fail:
+    cmp dword [failure_stage], 757
+    jne .put_json_fail_code_ready
+    mov dword [failure_stage], 757
+.put_json_fail_code_ready:
+    mov eax, -1
+    ret
+
 ; RDI=url, RSI=authorization, RDX=response, RCX=response cap, [RSP+8]=status out.
 secure_https_put_empty:
     lea r10, [expected_role_url]
@@ -490,6 +564,8 @@ expected_unban_url: db 'https://discord.com/api/v10/guilds/123456789012345678/ba
 expected_unban_url_len equ $ - expected_unban_url
 expected_kick_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_kick_url_len equ $ - expected_kick_url
+ban_body: db '{"delete_message_seconds":0}'
+ban_body_len equ $ - ban_body
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_get_url_len equ $ - expected_get_url
 bad_get_url: db 'https://example.invalid/api/v10/guilds/1'
@@ -516,6 +592,8 @@ get_calls: dq 0
 get_status: dq 0
 put_status: dq 0
 put_calls: dq 0
+put_json_calls: dq 0
+put_json_body_ptr: dq 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 

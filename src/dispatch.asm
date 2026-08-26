@@ -35,6 +35,7 @@ extern guild_auth_get_bot_roles
 extern guild_auth_bot_above_roles
 extern discord_unban_member
 extern discord_kick_member
+extern discord_ban_member
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -85,6 +86,7 @@ extern discord_get_json
 %define CMD_SUMMARIZE 8
 %define CMD_WARN 9
 %define CMD_KICK 10
+%define CMD_BAN 11
 %define CMD_ADDWORD 17
 %define CMD_REMOVEWORD 18
 %define CMD_WORDS 19
@@ -377,6 +379,8 @@ dispatch_message_create:
     je .warn
     cmp eax, CMD_KICK
     je .kick
+    cmp eax, CMD_BAN
+    je .ban
     cmp eax, CMD_WARNINGS
     je .warnings
     cmp eax, CMD_CLEARWARN
@@ -1149,6 +1153,45 @@ dispatch_message_create:
 .kick_usage:
     lea rdi, [kick_usage_response]
     mov esi, kick_usage_response_len
+    jmp .reply
+
+.ban:
+    mov r8, PERMISSION_BAN_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_BAN_MEMBERS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .ban_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .ban_usage
+    mov [moderation_target_len], eax
+    lea rdi, [config_value]
+    mov esi, eax
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [config_value]
+    mov ecx, [moderation_target_len]
+    call discord_ban_member
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [ban_success_response]
+    mov esi, ban_success_response_len
+    jmp .reply
+.ban_usage:
+    lea rdi, [ban_usage_response]
+    mov esi, ban_usage_response_len
     jmp .reply
 
 .unban:
@@ -2487,6 +2530,10 @@ kick_usage_response: db 'Usage: kick <@user>'
 kick_usage_response_len equ $ - kick_usage_response
 kick_success_response: db 'User kicked.'
 kick_success_response_len equ $ - kick_success_response
+ban_usage_response: db 'Usage: ban <@user>'
+ban_usage_response_len equ $ - ban_usage_response
+ban_success_response: db 'User banned.'
+ban_success_response_len equ $ - ban_success_response
 unban_usage_response: db 'Usage: unban <user-id>'
 unban_usage_response_len equ $ - unban_usage_response
 unban_success_response: db 'User unbanned.'

@@ -6,12 +6,14 @@ global discord_delete_message
 global discord_get_json
 global discord_unban_member
 global discord_kick_member
+global discord_ban_member
 global discord_add_member_role
 
 extern secure_https_post_json
 extern secure_https_delete
 extern secure_https_get
 extern secure_https_put_empty
+extern secure_https_put_json
 extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
@@ -400,6 +402,106 @@ discord_kick_member:
     ret
 
 ; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len. EAX=0 only for
+; Discord HTTP 2xx. Dispatch validates target hierarchy before this route.
+discord_ban_member:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r13d, r13d
+    jz .bad
+    test r15d, r15d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r15d, 64
+    ja .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov eax, guild_ban_prefix_len
+    add eax, r13d
+    add eax, guild_ban_middle_len
+    add eax, r15d
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    mov [guild_ban_url_len], rax
+    lea rdi, [request_url]
+    lea rsi, [guild_ban_prefix]
+    mov edx, guild_ban_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    lea rsi, [guild_ban_middle]
+    mov edx, guild_ban_middle_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    add rdi, guild_ban_middle_len
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url]
+    add rdi, [guild_ban_url_len]
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [ban_body]
+    mov ecx, ban_body_len
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_put_json
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len. EAX=0 only for
 ; Discord HTTP 2xx. This route is intentionally limited to unban; target-role
 ; hierarchy is not applicable because the target is not a current guild member.
 discord_unban_member:
@@ -630,6 +732,15 @@ discord_add_member_role:
     ret
 
 ; Wrapper maintains System V stack arguments for `long *status_out` (argument 5).
+; Wrapper keeps the seventh status pointer on the System V stack.
+call_secure_put_json:
+    sub rsp, 8
+    lea rax, [response_status]
+    mov [rsp], rax
+    call secure_https_put_json
+    add rsp, 8
+    ret
+
 call_secure_put:
     sub rsp, 8
     lea rax, [response_status]
@@ -724,6 +835,8 @@ json_prefix: db '{"content":"'
 json_prefix_len equ $ - json_prefix
 json_suffix: db '"}'
 json_suffix_len equ $ - json_suffix
+ban_body: db '{"delete_message_seconds":0}'
+ban_body_len equ $ - ban_body
 
 section .data
 response_status: dq 0

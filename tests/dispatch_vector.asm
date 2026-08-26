@@ -30,6 +30,7 @@ global guild_auth_get_bot_roles
 global guild_auth_bot_above_roles
 global discord_unban_member
 global discord_kick_member
+global discord_ban_member
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -1046,6 +1047,11 @@ discord_kick_member:
     xor eax, eax
     ret
 
+discord_ban_member:
+    inc qword [ban_calls]
+    xor eax, eax
+    ret
+
 guild_auth_roles_have:
     xor eax, eax
     ret
@@ -1608,6 +1614,7 @@ reply_mode: dd REPLY_NONE
 reply_get_calls: dq 0
 unban_calls: dq 0
 kick_calls: dq 0
+ban_calls: dq 0
 bot_permission_enabled: db 0
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles
