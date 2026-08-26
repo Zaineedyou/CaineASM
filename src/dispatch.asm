@@ -10,6 +10,7 @@ extern json_object_end
 extern json_array_end
 extern command_classify
 extern discord_send_text
+extern discord_delete_message
 extern groq_chat_once
 extern groq_select_guild
 extern afk_set
@@ -23,6 +24,7 @@ extern guild_auth_is_manager
 extern guild_auth_roles_have
 extern guild_word_add
 extern guild_word_remove
+extern guild_word_matches
 extern guild_channel_disable
 extern guild_channel_enable
 extern guild_channel_is_disabled
@@ -191,6 +193,42 @@ dispatch_message_create:
     test eax, eax
     jle .handled
     mov r15d, eax
+
+    ; Source-equivalent automod runs before XP/AFK routing and before disabled
+    ; channel suppression. A malformed/missing message ID fails closed: no
+    ; delete request is constructed from unverified identifiers.
+    cmp dword [guild_id_len], 0
+    je .automod_done
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [message_content]
+    mov ecx, r15d
+    call guild_word_matches
+    test rax, rax
+    jz .automod_done
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_find_key
+    test rax, rax
+    jz .automod_done
+    mov rdi, rax
+    lea rsi, [r12 + r13]
+    lea rdx, [automod_message_id]
+    mov ecx, AUTHOR_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .automod_done
+    lea rdi, [channel_id]
+    mov esi, r14d
+    lea rdx, [automod_message_id]
+    mov ecx, eax
+    call discord_delete_message
+    lea rdi, [automod_response]
+    mov esi, automod_response_len
+    jmp .reply
+.automod_done:
 
     ; Disabled channels still reach prior message-state bookkeeping, but no
     ; command/AI routing is allowed, matching the source event order.
@@ -1293,6 +1331,8 @@ key_id: db 'id'
 key_id_len equ $ - key_id
 key_content: db 'content'
 key_content_len equ $ - key_content
+automod_response: db 'Automod: message deleted for a banned word.'
+automod_response_len equ $ - automod_response
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -1436,6 +1476,7 @@ config_success_ptr: resq 1
 config_success_len: resd 1
 config_value_len: resd 1
 config_value: resb AUTHOR_ID_CAP
+automod_message_id: resb AUTHOR_ID_CAP
 rank_response: resb 32
 rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP

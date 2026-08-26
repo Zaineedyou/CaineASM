@@ -5,6 +5,7 @@ extern dispatch_message_create
 
 global _start
 global discord_send_text
+global discord_delete_message
 global groq_chat_once
 global groq_select_guild
 global afk_set
@@ -18,6 +19,7 @@ global guild_auth_is_manager
 global guild_auth_roles_have
 global guild_word_add
 global guild_word_remove
+global guild_word_matches
 global guild_channel_disable
 global guild_channel_enable
 global guild_channel_is_disabled
@@ -356,8 +358,24 @@ _start:
     cmp qword [config_set_calls], 6
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 21
+    mov dword [automod_enabled], 1
+    lea rax, [automod_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], automod_response_len
+    lea rdi, [automod_event]
+    mov esi, automod_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 1
+    jne .fail
+    cmp qword [send_calls], 19
+    jne .fail
+    mov dword [automod_enabled], 0
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 22
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -366,7 +384,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 19
+    cmp qword [send_calls], 20
     jne .fail
 
     mov eax, SYS_EXIT
@@ -416,6 +434,47 @@ xp_get:
 
 afk_clear:
     xor eax, eax
+    ret
+
+; Automod seam returns a configured banned-word marker only for its dedicated vector.
+guild_word_matches:
+    cmp dword [automod_enabled], 1
+    jne .no_match
+    lea rax, [blocked_word]
+    mov edx, blocked_word_len
+    ret
+.no_match:
+    xor eax, eax
+    xor edx, edx
+    ret
+
+discord_delete_message:
+    push rbx
+    mov rbx, rdx
+    cmp esi, channel_id_len
+    jne .bad
+    lea r8, [channel_id]
+    mov r9d, channel_id_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp ecx, automod_message_id_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [automod_message_id]
+    mov edx, automod_message_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [delete_calls]
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop rbx
     ret
 
 ; Role permission seam remains denied in the owner-focused fixture.
@@ -746,6 +805,8 @@ removeautorole_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1"
 removeautorole_event_len equ $ - removeautorole_event
 welcomemsg_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setwelcomemsg Welcome {user}","author":{"id":"user-2","bot":false}}}'
 welcomemsg_event_len equ $ - welcomemsg_event
+automod_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"998877665544332211","guild_id":"guild-1","channel_id":"123456789012345678","content":"blocked content","author":{"id":"user-2","bot":false}}}'
+automod_event_len equ $ - automod_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -806,6 +867,12 @@ text_saved_response: db 'Guild message setting saved.'
 text_saved_response_len equ $ - text_saved_response
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
+automod_response: db 'Automod: message deleted for a banned word.'
+automod_response_len equ $ - automod_response
+blocked_word: db 'blocked'
+blocked_word_len equ $ - blocked_word
+automod_message_id: db '998877665544332211'
+automod_message_id_len equ $ - automod_message_id
 
 section .data
 bot_prefix_ptr: dq 0
@@ -827,4 +894,6 @@ channel_disable_calls: dq 0
 channel_enable_calls: dq 0
 config_set_calls: dq 0
 config_delete_calls: dq 0
+delete_calls: dq 0
+automod_enabled: dd 0
 failure_stage: dd 0
