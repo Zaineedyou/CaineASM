@@ -336,7 +336,7 @@ key_content_len equ $ - key_content
 retry_pause: dq 1, 0
 setting_model: db 'model'
 setting_model_len equ $ - setting_model
-setting_persona: db 'persona'
+setting_persona: db 'system_prompt'
 setting_persona_len equ $ - setting_persona
 default_model: db 'llama-3.3-70b-versatile'
 default_model_len equ $ - default_model

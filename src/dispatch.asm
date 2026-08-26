@@ -1247,13 +1247,13 @@ history_usage_response: db 'Usage: sethistory <number 5-100>.'
 history_usage_response_len equ $ - history_usage_response
 history_saved_response: db 'Guild history limit saved.'
 history_saved_response_len equ $ - history_saved_response
-setting_persona: db 'persona'
+setting_persona: db 'system_prompt'
 setting_persona_len equ $ - setting_persona
-setting_history: db 'history'
+setting_history: db 'max_history'
 setting_history_len equ $ - setting_history
 setting_model: db 'model'
 setting_model_len equ $ - setting_model
-setting_autorole: db 'autorole'
+setting_autorole: db 'auto_role'
 setting_autorole_len equ $ - setting_autorole
 setting_welcome_channel: db 'welcome_channel'
 setting_welcome_channel_len equ $ - setting_welcome_channel
@@ -1263,9 +1263,9 @@ setting_level_channel: db 'level_channel'
 setting_level_channel_len equ $ - setting_level_channel
 setting_log_channel: db 'log_channel'
 setting_log_channel_len equ $ - setting_log_channel
-setting_welcome_message: db 'welcome_message'
+setting_welcome_message: db 'welcome_msg'
 setting_welcome_message_len equ $ - setting_welcome_message
-setting_goodbye_message: db 'goodbye_message'
+setting_goodbye_message: db 'goodbye_msg'
 setting_goodbye_message_len equ $ - setting_goodbye_message
 channel_usage_response: db 'Usage: mention a channel.'
 channel_usage_response_len equ $ - channel_usage_response

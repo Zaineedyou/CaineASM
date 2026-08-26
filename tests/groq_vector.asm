@@ -109,7 +109,7 @@ guild_config_get:
     mov edx, custom_model_len
     ret
 .persona:
-    cmp byte [rdx], 'p'
+    cmp byte [rdx], 's'
     jne .missing
     lea rax, [custom_persona]
     mov edx, custom_persona_len

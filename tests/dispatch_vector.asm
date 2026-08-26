@@ -764,9 +764,9 @@ persona_saved_response: db 'Guild persona saved.'
 persona_saved_response_len equ $ - persona_saved_response
 history_saved_response: db 'Guild history limit saved.'
 history_saved_response_len equ $ - history_saved_response
-setting_persona: db 'persona'
+setting_persona: db 'system_prompt'
 setting_persona_len equ $ - setting_persona
-setting_history: db 'history'
+setting_history: db 'max_history'
 setting_history_len equ $ - setting_history
 persona_value: db 'Caine santai'
 persona_value_len equ $ - persona_value
@@ -780,9 +780,9 @@ setting_model: db 'model'
 setting_model_len equ $ - setting_model
 setting_log_channel: db 'log_channel'
 setting_log_channel_len equ $ - setting_log_channel
-setting_autorole: db 'autorole'
+setting_autorole: db 'auto_role'
 setting_autorole_len equ $ - setting_autorole
-setting_welcome_message: db 'welcome_message'
+setting_welcome_message: db 'welcome_msg'
 setting_welcome_message_len equ $ - setting_welcome_message
 log_channel_value: db '987654'
 log_channel_value_len equ $ - log_channel_value
