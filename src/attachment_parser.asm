@@ -2,6 +2,7 @@ BITS 64
 DEFAULT REL
 
 global attachment_extract_image_url
+global attachment_copy_image_mime
 
 extern json_find_key
 extern json_read_string
@@ -125,6 +126,36 @@ attachment_extract_image_url:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=destination, ESI=capacity. EAX=MIME length or -1.
+attachment_copy_image_mime:
+    test rdi, rdi
+    jz .bad
+    cmp esi, 2
+    jb .bad
+    xor ecx, ecx
+.copy:
+    cmp ecx, MIME_CAP - 1
+    jae .bad
+    mov al, [attachment_mime + rcx]
+    test al, al
+    jz .done
+    cmp ecx, esi
+    jae .bad
+    mov [rdi + rcx], al
+    inc ecx
+    jmp .copy
+.done:
+    test ecx, ecx
+    jz .bad
+    cmp ecx, esi
+    jae .bad
+    mov byte [rdi + rcx], 0
+    mov eax, ecx
+    ret
+.bad:
+    mov eax, -1
     ret
 
 section .rodata
