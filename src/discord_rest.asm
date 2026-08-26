@@ -11,6 +11,7 @@ global discord_lock_channel
 global discord_unlock_channel
 global discord_set_slowmode
 global discord_add_member_role
+global discord_remove_member_role
 
 extern secure_https_post_json
 extern secure_https_delete
@@ -846,6 +847,14 @@ discord_unban_member:
 ; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8=role, R9D=role len.
 ; EAX=0 only on Discord HTTP 2xx. All route construction and identifier checks are NASM-owned.
 discord_add_member_role:
+    mov byte [role_remove_mode], 0
+    jmp discord_member_role_route
+
+; Same validated endpoint as add-role, but DELETEs the exact member role.
+discord_remove_member_role:
+    mov byte [role_remove_mode], 1
+
+discord_member_role_route:
     push rbx
     push r12
     push r13
@@ -951,9 +960,18 @@ discord_add_member_role:
     mov byte [rdi + rdx], 0
     lea rdi, [request_url]
     lea rsi, [authorization]
+    cmp byte [role_remove_mode], 1
+    je .delete_role
     lea rdx, [response_body]
     mov ecx, RESPONSE_BODY_CAP
     call call_secure_put
+    jmp .transport_done
+.delete_role:
+    lea rdx, [response_body]
+    mov ecx, RESPONSE_BODY_CAP
+    lea r8, [response_status]
+    call secure_https_delete
+.transport_done:
     test rax, rax
     js .bad
     mov rax, [response_status]
@@ -1102,6 +1120,7 @@ section .data
 response_status: dq 0
 role_id_ptr: dq 0
 role_id_len: dd 0
+role_remove_mode: db 0
 guild_ban_url_len: dq 0
 channel_permission_mode: db 0
 slowmode_body_len: dd 0

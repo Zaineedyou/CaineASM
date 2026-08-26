@@ -11,6 +11,7 @@ extern discord_lock_channel
 extern discord_unlock_channel
 extern discord_set_slowmode
 extern discord_add_member_role
+extern discord_remove_member_role
 extern json_escape_append
 
 global _start
@@ -357,6 +358,37 @@ _start:
     cmp eax, -1
     jne .fail
     cmp qword [put_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 115
+    mov qword [delete_calls], 0
+    mov qword [delete_status], 204
+    lea rax, [expected_role_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_role_url_len
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [message_id]
+    mov ecx, message_id_len
+    lea r8, [role_id]
+    mov r9d, role_id_len
+    call discord_remove_member_role
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 116
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [message_id]
+    mov ecx, message_id_len
+    lea r8, [invalid_channel]
+    mov r9d, invalid_channel_len
+    call discord_remove_member_role
+    cmp eax, -1
+    jne .fail
+    cmp qword [delete_calls], 1
     jne .fail
 
     mov dword [failure_stage], 12
