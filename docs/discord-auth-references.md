@@ -16,3 +16,9 @@ Temuan teknis yang dipakai untuk port CaineGO:
 5. Nilai bit yang relevan untuk perilaku sumber CaineGO mencakup `KICK_MEMBERS=0x2`, `BAN_MEMBERS=0x4`, `ADMINISTRATOR=0x8`, `MANAGE_CHANNELS=0x10`, `MANAGE_MESSAGES=0x2000`, `MANAGE_NICKNAMES=0x8000000`, `MANAGE_ROLES=0x10000000`, dan `MODERATE_MEMBERS=0x10000000000`.
 
 Implikasi: cache owner/role hanya merupakan fondasi base permission. Operasi Discord destruktif tidak diaktifkan sampai resolver overwrite kanal dan hierarchy role bot/target diberlakukan di NASM.
+
+6. Objek channel memuat `permission_overwrites`; permission terhitung dalam objek channel hanya dipastikan hadir pada interaction `resolved` data, bukan pesan Gateway biasa.
+7. Urutan resolver overwrite resmi adalah base `@everyone`, union role; kemudian deny/allow `@everyone`, deny/allow seluruh role member, lalu deny/allow member eksplisit. Bit `ADMINISTRATOR` melewati overwrite kanal.
+8. Gateway dapat mengirim channel ter-obfuscasi ketika bot tidak bisa melihatnya. Resolver harus fail-closed bila state overwrite/kanal tidak lengkap.
+
+Referensi tambahan: [Channel Resource](https://docs.discord.com/developers/resources/channel).

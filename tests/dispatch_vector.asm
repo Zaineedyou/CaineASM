@@ -12,6 +12,12 @@ global xp_get
 global afk_clear
 global state_format_afk_list
 global state_format_leaderboard
+global state_format_banned_words
+global guild_auth_is_owner
+global guild_word_add
+global guild_word_remove
+global guild_channel_disable
+global guild_channel_enable
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -152,8 +158,65 @@ _start:
     cmp qword [xp_calls], 4
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
+    ; Owner-gated policy commands mutate bounded state and render words.
     mov dword [failure_stage], 10
+    lea rax, [word_added_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], word_added_response_len
+    lea rdi, [addword_event]
+    mov esi, addword_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 8
+    jne .fail
+    cmp qword [word_add_calls], 1
+    jne .fail
+    cmp qword [xp_calls], 5
+    jne .fail
+
+    mov dword [failure_stage], 11
+    lea rax, [words_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], words_response_len
+    lea rdi, [words_event]
+    mov esi, words_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 9
+    jne .fail
+
+    mov dword [failure_stage], 12
+    lea rax, [channel_disabled_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], channel_disabled_response_len
+    lea rdi, [disable_event]
+    mov esi, disable_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 10
+    jne .fail
+    cmp qword [channel_disable_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 13
+    lea rax, [channel_enabled_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], channel_enabled_response_len
+    lea rdi, [enable_event]
+    mov esi, enable_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 11
+    jne .fail
+    cmp qword [channel_enable_calls], 1
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 14
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -162,7 +225,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 8
+    cmp qword [send_calls], 12
     jne .fail
 
     mov eax, SYS_EXIT
@@ -208,6 +271,28 @@ afk_clear:
     xor eax, eax
     ret
 
+; Owner seam allows the test fixture's guild owner through the safe temporary gate.
+guild_auth_is_owner:
+    mov al, 1
+    ret
+
+guild_word_add:
+    inc qword [word_add_calls]
+    xor eax, eax
+    ret
+guild_word_remove:
+    inc qword [word_remove_calls]
+    xor eax, eax
+    ret
+guild_channel_disable:
+    inc qword [channel_disable_calls]
+    xor eax, eax
+    ret
+guild_channel_enable:
+    inc qword [channel_enable_calls]
+    xor eax, eax
+    ret
+
 ; Formatter seams verify dispatch's guild and exact Discord-capacity contract.
 ; RDI=guild, ESI=guild len, RDX=output, ECX=capacity.
 state_format_afk_list:
@@ -227,6 +312,25 @@ state_format_afk_list:
     mov edx, afklist_response_len
     call copy_bytes
     mov eax, afklist_response_len
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
+    ret
+
+state_format_banned_words:
+    push rbx
+    mov rbx, rdx
+    cmp esi, guild_id_len
+    jne .bad
+    cmp ecx, 2000
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [words_response]
+    mov edx, words_response_len
+    call copy_bytes
+    mov eax, words_response_len
     pop rbx
     ret
 .bad:
@@ -419,6 +523,14 @@ ai_response: db 'AI summary'
 ai_response_len equ $ - ai_response
 unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^nonesuch","author":{"bot":false}}}'
 unknown_event_len equ $ - unknown_event
+addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
+addword_event_len equ $ - addword_event
+words_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^words","author":{"id":"user-2","bot":false}}}'
+words_event_len equ $ - words_event
+disable_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^disable","author":{"id":"user-2","bot":false}}}'
+disable_event_len equ $ - disable_event
+enable_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^enable","author":{"id":"user-2","bot":false}}}'
+enable_event_len equ $ - enable_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -431,6 +543,14 @@ leaderboard_response: db 'XP leaderboard:', 10, '1. user-2 - 3 XP', 10
 leaderboard_response_len equ $ - leaderboard_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
+words_response: db 'Banned words:', 10, '- bad', 10
+words_response_len equ $ - words_response
+word_added_response: db 'Banned word added.'
+word_added_response_len equ $ - word_added_response
+channel_enabled_response: db 'Bot enabled in this channel.'
+channel_enabled_response_len equ $ - channel_enabled_response
+channel_disabled_response: db 'Bot disabled in this channel.'
+channel_disabled_response_len equ $ - channel_disabled_response
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
 
@@ -443,4 +563,8 @@ send_calls: dq 0
 groq_calls: dq 0
 afk_calls: dq 0
 xp_calls: dq 0
+word_add_calls: dq 0
+word_remove_calls: dq 0
+channel_disable_calls: dq 0
+channel_enable_calls: dq 0
 failure_stage: dd 0

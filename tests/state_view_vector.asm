@@ -6,6 +6,7 @@ global _start
 extern store_set
 extern state_format_afk_list
 extern state_format_leaderboard
+extern state_format_banned_words
 
 %define SYS_EXIT 60
 %define OUTPUT_CAP 2000
@@ -59,6 +60,53 @@ _start:
     lea rdi, [output]
     lea rsi, [afk_empty_expected]
     mov edx, afk_empty_expected_len
+    call equal_bytes
+    test al, al
+    jz .fail
+
+    ; Word view retains only the exact guild namespace and renders explicit empty output.
+    mov dword [failure_stage], 1
+    lea rdi, [word_a_key]
+    mov esi, word_a_key_len
+    lea rdx, [word_present]
+    mov ecx, word_present_len
+    call store_set
+    test eax, eax
+    jnz .fail
+    lea rdi, [word_b_key]
+    mov esi, word_b_key_len
+    lea rdx, [word_present]
+    mov ecx, word_present_len
+    call store_set
+    test eax, eax
+    jnz .fail
+    lea rdi, [guild_a]
+    mov esi, guild_a_len
+    lea rdx, [output]
+    mov ecx, OUTPUT_CAP
+    call state_format_banned_words
+    mov dword [failure_stage], 2
+    cmp eax, words_expected_len
+    jne .fail
+    mov dword [failure_stage], 3
+    lea rdi, [output]
+    lea rsi, [words_expected]
+    mov edx, words_expected_len
+    call equal_bytes
+    test al, al
+    jz .fail
+    lea rdi, [guild_empty]
+    mov esi, guild_empty_len
+    lea rdx, [output]
+    mov ecx, OUTPUT_CAP
+    call state_format_banned_words
+    mov dword [failure_stage], 4
+    cmp eax, words_empty_expected_len
+    jne .fail
+    mov dword [failure_stage], 5
+    lea rdi, [output]
+    lea rsi, [words_empty_expected]
+    mov edx, words_empty_expected_len
     call equal_bytes
     test al, al
     jz .fail
@@ -292,7 +340,7 @@ _start:
     syscall
 .fail:
     mov eax, SYS_EXIT
-    mov edi, 1
+    mov edi, [failure_stage]
     syscall
 
 ; RDI and RSI buffers, EDX count. AL=1 when equal.
@@ -332,6 +380,16 @@ unrelated_key: db 'setting:guild-a'
 unrelated_key_len equ $ - unrelated_key
 unrelated_value: db 'ignored'
 unrelated_value_len equ $ - unrelated_value
+word_a_key: db 'word:guild-a:spoiler'
+word_a_key_len equ $ - word_a_key
+word_b_key: db 'word:guild-b:other'
+word_b_key_len equ $ - word_b_key
+word_present: db '1'
+word_present_len equ $ - word_present
+words_expected: db 'Banned words:', 10, '- spoiler', 10
+words_expected_len equ $ - words_expected
+words_empty_expected: db 'Banned words:', 10, '(none)', 10
+words_empty_expected_len equ $ - words_empty_expected
 afk_expected: db 'AFK members:', 10, '- user-1: away?now', 10
 afk_expected_len equ $ - afk_expected
 afk_empty_expected: db 'AFK members:', 10, 'No AFK members in this server.', 10
@@ -406,6 +464,9 @@ long_reason: times 160 db 'r'
 long_reason_len equ $ - long_reason
 truncated_notice: db '[truncated]', 10
 truncated_notice_len equ $ - truncated_notice
+
+section .data
+failure_stage: dd 0
 
 section .bss
 output: resb OUTPUT_CAP

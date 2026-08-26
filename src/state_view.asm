@@ -3,6 +3,7 @@ DEFAULT REL
 
 global state_format_afk_list
 global state_format_leaderboard
+global state_format_banned_words
 
 extern store_foreach
 
@@ -199,6 +200,153 @@ state_format_leaderboard:
 .out:
     pop r15
     pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild, ESI=guild length, RDX=output, ECX=output capacity.
+; EAX=formatted byte length, or -1 for invalid input/internal iterator failure.
+state_format_banned_words:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r15d, r15d
+    jle .bad
+    cmp r15d, OUTPUT_CAP
+    jbe .capacity_ready
+    mov r15d, OUTPUT_CAP
+.capacity_ready:
+    mov [view_guild_ptr], r12
+    mov [view_guild_len], r13d
+    mov [view_out_ptr], r14
+    mov [view_out_cap], r15d
+    mov dword [view_out_len], 0
+    mov dword [view_match_count], 0
+    mov dword [view_truncated], 0
+    lea rdi, [words_header]
+    mov esi, words_header_len
+    call view_append_bytes
+    test eax, eax
+    js .bad
+    lea rdi, [view_collect_word]
+    xor esi, esi
+    call store_foreach
+    test eax, eax
+    js .bad
+    cmp dword [view_match_count], 0
+    jne .done
+    lea rdi, [words_empty]
+    mov esi, words_empty_len
+    call view_append_bytes
+    test eax, eax
+    js .bad
+.done:
+    mov eax, [view_out_len]
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; store_foreach callback. RDI=context, RSI=key, EDX=key length,
+; RCX=value, R8D=value length. It never mutates store state.
+view_collect_word:
+    push rbx
+    push r12
+    push r13
+    mov r12, rsi
+    mov r13d, edx
+    mov eax, [view_guild_len]
+    add eax, 6                       ; "word:" plus the separating colon.
+    cmp r13d, eax
+    jbe .ignore
+    cmp byte [r12], 'w'
+    jne .ignore
+    cmp byte [r12 + 1], 'o'
+    jne .ignore
+    cmp byte [r12 + 2], 'r'
+    jne .ignore
+    cmp byte [r12 + 3], 'd'
+    jne .ignore
+    cmp byte [r12 + 4], ':'
+    jne .ignore
+    mov ebx, [view_guild_len]
+    xor ecx, ecx
+.guild_loop:
+    cmp ecx, ebx
+    jae .guild_done
+    mov al, [r12 + rcx + 5]
+    mov rdx, [view_guild_ptr]
+    cmp al, [rdx + rcx]
+    jne .ignore
+    inc ecx
+    jmp .guild_loop
+.guild_done:
+    mov eax, ebx
+    add eax, 5
+    cmp byte [r12 + rax], ':'
+    jne .ignore
+    inc eax
+    mov edx, r13d
+    sub edx, eax
+    jle .ignore
+    lea rdi, [r12 + rax]
+    mov esi, edx
+    add edx, words_row_prefix_len + line_end_len
+    mov edi, edx
+    call view_row_fits_with_notice
+    test al, al
+    jz .truncated
+    lea rdi, [words_row_prefix]
+    mov esi, words_row_prefix_len
+    call view_append_bytes
+    test eax, eax
+    js .abort
+    mov eax, ebx
+    add eax, 6
+    lea rdi, [r12 + rax]
+    mov esi, r13d
+    sub esi, eax
+    call view_append_sanitized
+    test eax, eax
+    js .abort
+    lea rdi, [line_end]
+    mov esi, line_end_len
+    call view_append_bytes
+    test eax, eax
+    js .abort
+    inc dword [view_match_count]
+    xor eax, eax
+    jmp .out
+.truncated:
+    call view_append_truncated
+    test eax, eax
+    js .abort
+    inc dword [view_match_count]
+    mov eax, 1
+    jmp .out
+.ignore:
+    xor eax, eax
+    jmp .out
+.abort:
+    mov eax, -1
+.out:
     pop r13
     pop r12
     pop rbx
@@ -662,8 +810,14 @@ view_append_uint32:
     ret
 
 section .rodata
-afk_header: db 'AFK members:', 10
+afk_header: db 'AFK users:\n'
 afk_header_len equ $ - afk_header
+words_header: db 'Banned words:\n'
+words_header_len equ $ - words_header
+words_empty: db '(none)\n'
+words_empty_len equ $ - words_empty
+words_row_prefix: db '- '
+words_row_prefix_len equ $ - words_row_prefix
 afk_empty: db 'No AFK members in this server.', 10
 afk_empty_len equ $ - afk_empty
 afk_row_prefix: db '- '

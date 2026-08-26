@@ -16,6 +16,12 @@ extern xp_increment
 extern xp_get
 extern state_format_afk_list
 extern state_format_leaderboard
+extern state_format_banned_words
+extern guild_auth_is_owner
+extern guild_word_add
+extern guild_word_remove
+extern guild_channel_disable
+extern guild_channel_enable
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -35,6 +41,11 @@ extern bot_prefix_len
 %define CMD_LEADERBOARD 6
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
+%define CMD_ADDWORD 17
+%define CMD_REMOVEWORD 18
+%define CMD_WORDS 19
+%define CMD_ENABLE 20
+%define CMD_DISABLE 21
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -234,6 +245,16 @@ dispatch_message_create:
     je .reset
     cmp eax, CMD_SUMMARIZE
     je .summarize
+    cmp eax, CMD_ADDWORD
+    je .addword
+    cmp eax, CMD_REMOVEWORD
+    je .removeword
+    cmp eax, CMD_WORDS
+    je .words
+    cmp eax, CMD_ENABLE
+    je .enable
+    cmp eax, CMD_DISABLE
+    je .disable
     test eax, eax
     jz .unknown
     lea rdi, [registered_notice]
@@ -337,6 +358,133 @@ dispatch_message_create:
     mov esi, eax
     lea rdi, [state_view_reply]
     jmp .reply
+.addword:
+    mov dword [policy_command_op], 1
+    jmp .word_mutation
+.removeword:
+    mov dword [policy_command_op], 2
+.word_mutation:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+.word_skip_spaces:
+    cmp ebx, r15d
+    jae .word_usage
+    mov al, [message_content + rbx]
+    cmp al, ' '
+    je .word_space_advance
+    cmp al, 9
+    je .word_space_advance
+    jmp .word_copy_start
+.word_space_advance:
+    inc ebx
+    jmp .word_skip_spaces
+.word_copy_start:
+    xor ecx, ecx
+.word_copy:
+    lea eax, [ebx + ecx]
+    cmp eax, r15d
+    jae .word_ready
+    cmp ecx, COMMAND_CAP - 1
+    jae .word_usage
+    mov al, [message_content + rbx + rcx]
+    cmp al, ' '
+    je .word_ready
+    cmp al, 9
+    je .word_ready
+    cmp al, 10
+    je .word_ready
+    cmp al, 13
+    je .word_ready
+    cmp al, 'A'
+    jb .word_store
+    cmp al, 'Z'
+    ja .word_store
+    add al, 'a' - 'A'
+.word_store:
+    mov [argument_buffer + rcx], al
+    inc ecx
+    jmp .word_copy
+.word_ready:
+    test ecx, ecx
+    jz .word_usage
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [argument_buffer]
+    cmp dword [policy_command_op], 1
+    jne .remove_word
+    call guild_word_add
+    jmp .word_result
+.remove_word:
+    call guild_word_remove
+.word_result:
+    test eax, eax
+    jnz .policy_error
+    cmp dword [policy_command_op], 1
+    jne .word_removed
+    lea rdi, [word_added_response]
+    mov esi, word_added_response_len
+    jmp .reply
+.word_removed:
+    lea rdi, [word_removed_response]
+    mov esi, word_removed_response_len
+    jmp .reply
+.word_usage:
+    lea rdi, [word_usage_response]
+    mov esi, word_usage_response_len
+    jmp .reply
+.words:
+    cmp dword [guild_id_len], 0
+    je .state_view_unavailable
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [state_view_reply]
+    mov ecx, STATE_VIEW_REPLY_CAP
+    call state_format_banned_words
+    test eax, eax
+    jle .state_view_error
+    mov esi, eax
+    lea rdi, [state_view_reply]
+    jmp .reply
+.enable:
+    mov dword [policy_command_op], 3
+    jmp .channel_policy
+.disable:
+    mov dword [policy_command_op], 4
+.channel_policy:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [channel_id]
+    mov ecx, r14d
+    cmp dword [policy_command_op], 3
+    jne .disable_channel
+    call guild_channel_enable
+    jmp .channel_result
+.disable_channel:
+    call guild_channel_disable
+.channel_result:
+    test eax, eax
+    jnz .policy_error
+    cmp dword [policy_command_op], 3
+    jne .channel_disabled
+    lea rdi, [channel_enabled_response]
+    mov esi, channel_enabled_response_len
+    jmp .reply
+.channel_disabled:
+    lea rdi, [channel_disabled_response]
+    mov esi, channel_disabled_response_len
+    jmp .reply
+.admin_denied:
+    lea rdi, [admin_denied_response]
+    mov esi, admin_denied_response_len
+    jmp .reply
+.policy_error:
+    lea rdi, [policy_error_response]
+    mov esi, policy_error_response_len
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
@@ -416,6 +564,25 @@ dispatch_message_create:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; AL=1 only for a cached server owner in a guild context. This is deliberately
+; fail-closed until channel-overwrite authorization is connected for non-owner admins.
+dispatch_owner_authorized:
+    cmp dword [guild_id_len], 0
+    je .no
+    cmp dword [author_id_len], 0
+    je .no
+    sub rsp, 8
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call guild_auth_is_owner
+    add rsp, 8
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; RDI=content, ESI=content length. EAX=command byte offset, -1 if no valid prefix.
@@ -518,6 +685,20 @@ reset_response: db 'Reset is reserved for the persistence module; current state 
 reset_response_len equ $ - reset_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
+word_usage_response: db 'Usage: addword/removeword <word>.'
+word_usage_response_len equ $ - word_usage_response
+word_added_response: db 'Banned word added.'
+word_added_response_len equ $ - word_added_response
+word_removed_response: db 'Banned word removed.'
+word_removed_response_len equ $ - word_removed_response
+channel_enabled_response: db 'Bot enabled in this channel.'
+channel_enabled_response_len equ $ - channel_enabled_response
+channel_disabled_response: db 'Bot disabled in this channel.'
+channel_disabled_response_len equ $ - channel_disabled_response
+admin_denied_response: db 'Admin verification unavailable or denied.'
+admin_denied_response_len equ $ - admin_denied_response
+policy_error_response: db 'Policy state could not be saved.'
+policy_error_response_len equ $ - policy_error_response
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
 summarize_usage_response: db 'Usage: !summarize <text>'
@@ -545,9 +726,11 @@ section .bss
 channel_id: resb CHANNEL_ID_CAP
 guild_id: resb GUILD_ID_CAP
 author_id: resb AUTHOR_ID_CAP
+argument_buffer: resb COMMAND_CAP
 guild_id_len: resd 1
 author_id_len: resd 1
 rank_score: resd 1
+policy_command_op: resd 1
 rank_response: resb 32
 rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP
