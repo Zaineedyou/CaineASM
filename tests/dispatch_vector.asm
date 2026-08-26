@@ -25,6 +25,7 @@ global state_format_leaderboard
 global state_format_banned_words
 global guild_auth_is_manager
 global guild_auth_roles_have
+global channel_auth_resolve
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -971,6 +972,12 @@ discord_delete_message:
     ret
 
 ; Role permission seam remains denied in the owner-focused fixture.
+; Existing command fixtures use a complete, permissive channel snapshot. Exact
+; overwrite ordering is covered independently by channel_permissions_vector.
+channel_auth_resolve:
+    mov rax, -1
+    ret
+
 guild_auth_roles_have:
     xor eax, eax
     ret

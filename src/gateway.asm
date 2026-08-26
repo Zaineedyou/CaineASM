@@ -26,6 +26,8 @@ extern json_object_end
 extern dispatch_message_create
 extern guild_auth_reset
 extern guild_auth_cache_guild_create
+extern channel_auth_reset
+extern channel_auth_cache_guild_create
 extern lifecycle_member_add
 extern lifecycle_member_remove
 
@@ -210,8 +212,11 @@ gateway_process_frame:
     mov rdi, r12
     mov rsi, r13
     call guild_auth_cache_guild_create
-    ; Cache failures fail closed for role-derived authorization but do not
-    ; invalidate an otherwise healthy Gateway session.
+    mov rdi, r12
+    mov rsi, r13
+    call channel_auth_cache_guild_create
+    ; Cache failures fail closed for role/channel-derived authorization but do
+    ; not invalidate an otherwise healthy Gateway session.
     jmp .none
 .member_add:
     mov rdi, r12
@@ -735,6 +740,7 @@ gateway_now_ms:
 gateway_reset_state:
     sub rsp, 8
     call guild_auth_reset
+    call channel_auth_reset
     add rsp, 8
     mov byte [identified], 0
     mov byte [hello_received], 0

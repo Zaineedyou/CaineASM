@@ -12,6 +12,8 @@ global secure_gateway_close
 global dispatch_message_create
 global guild_auth_reset
 global guild_auth_cache_guild_create
+global channel_auth_reset
+global channel_auth_cache_guild_create
 global lifecycle_member_add
 global lifecycle_member_remove
 global discord_token_ptr
@@ -125,6 +127,8 @@ _start:
     jnz .fail
     cmp qword [auth_cache_calls], 1
     jne .fail
+    cmp qword [channel_cache_calls], 1
+    jne .fail
     cmp qword [dispatch_calls], 0
     jne .fail
 
@@ -171,6 +175,8 @@ _start:
     jne .fail
     cmp byte [gateway_bot_user_id], 0
     jne .fail
+    cmp qword [channel_reset_calls], 2
+    jne .fail
 
     mov eax, SYS_EXIT
     xor edi, edi
@@ -185,6 +191,10 @@ guild_auth_reset:
     inc qword [auth_reset_calls]
     ret
 
+channel_auth_reset:
+    inc qword [channel_reset_calls]
+    ret
+
 ; Auth cache seam: complete GUILD_CREATE frame is routed separately from messages.
 guild_auth_cache_guild_create:
     cmp rsi, guild_create_frame_len
@@ -197,6 +207,23 @@ guild_auth_cache_guild_create:
     test al, al
     jz .bad
     inc qword [auth_cache_calls]
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+channel_auth_cache_guild_create:
+    cmp rsi, guild_create_frame_len
+    jne .bad
+    lea r8, [guild_create_frame]
+    mov r9d, guild_create_frame_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [channel_cache_calls]
     xor eax, eax
     ret
 .bad:
@@ -343,6 +370,8 @@ send_calls: dq 0
 dispatch_calls: dq 0
 auth_reset_calls: dq 0
 auth_cache_calls: dq 0
+channel_cache_calls: dq 0
+channel_reset_calls: dq 0
 member_add_calls: dq 0
 member_remove_calls: dq 0
 failure_stage: dd 0

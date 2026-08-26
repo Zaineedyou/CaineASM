@@ -30,6 +30,7 @@ extern state_format_leaderboard
 extern state_format_banned_words
 extern guild_auth_is_manager
 extern guild_auth_roles_have
+extern channel_auth_resolve
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -140,6 +141,7 @@ dispatch_message_create:
     test eax, eax
     jle .handled
     mov r14d, eax
+    mov [channel_id_len], eax
     mov byte [channel_id + r14], 0
 
     ; Guild/user identity is optional for generic commands but required by AFK state.
@@ -1815,10 +1817,9 @@ dispatch_owner_authorized:
     xor eax, eax
     ret
 
-; R8=requested Discord permission bitset. AL=1 for BOT_OWNER_ID, cached guild
-; owner, or a member.roles union cached from a trusted GUILD_CREATE dispatch.
-; Channel overwrite state is not yet cached, therefore a missing/invalid member
-; role array fails closed instead of granting an unverified command.
+; R8=requested Discord permission bitset. BOT_OWNER_ID and cached guild owner
+; retain their source bypass; all other callers require a complete bounded
+; GUILD_CREATE role/channel snapshot and effective channel permissions.
 dispatch_has_permission:
     push rbx
     push r14
@@ -1857,13 +1858,23 @@ dispatch_has_permission:
     call json_array_end
     test rax, rax
     jz .no
-    lea rdi, [guild_id]
-    mov esi, [guild_id_len]
-    mov rdx, rbx
     mov rcx, rax
     sub rcx, rbx
-    mov r8, r14
-    call guild_auth_roles_have
+    push rcx
+    push rbx
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [channel_id]
+    mov ecx, [channel_id_len]
+    lea r8, [author_id]
+    mov r9d, [author_id_len]
+    call channel_auth_resolve
+    add rsp, 16
+    test rax, rax
+    js .no
+    test rax, r14
+    jz .no
+    mov al, 1
     jmp .out
 .yes:
     mov al, 1
@@ -2259,6 +2270,7 @@ guild_id: resb GUILD_ID_CAP
 author_id: resb AUTHOR_ID_CAP
 argument_buffer: resb COMMAND_CAP
 guild_id_len: resd 1
+channel_id_len: resd 1
 author_id_len: resd 1
 rank_score: resd 1
 policy_command_op: resd 1
