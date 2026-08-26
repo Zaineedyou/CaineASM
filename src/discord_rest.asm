@@ -4,6 +4,7 @@ DEFAULT REL
 global discord_send_text
 global discord_delete_message
 global discord_get_json
+global discord_unban_member
 global discord_add_member_role
 
 extern secure_https_post_json
@@ -298,6 +299,106 @@ discord_delete_message:
     pop rbx
     ret
 
+; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len. EAX=0 only for
+; Discord HTTP 2xx. This route is intentionally limited to unban; target-role
+; hierarchy is not applicable because the target is not a current guild member.
+discord_unban_member:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r13d, r13d
+    jz .bad
+    test r15d, r15d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r15d, 64
+    ja .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov eax, guild_ban_prefix_len
+    add eax, r13d
+    add eax, guild_ban_middle_len
+    add eax, r15d
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    mov [guild_ban_url_len], rax
+    lea rdi, [request_url]
+    lea rsi, [guild_ban_prefix]
+    mov edx, guild_ban_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    lea rsi, [guild_ban_middle]
+    mov edx, guild_ban_middle_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    add rdi, guild_ban_middle_len
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url]
+    add rdi, [guild_ban_url_len]
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [response_body]
+    mov ecx, RESPONSE_BODY_CAP
+    lea r8, [response_status]
+    call secure_https_delete
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8=role, R9D=role len.
 ; EAX=0 only on Discord HTTP 2xx. All route construction and identifier checks are NASM-owned.
 discord_add_member_role:
@@ -505,6 +606,10 @@ url_prefix: db 'https://discord.com/api/v10/channels/'
 url_prefix_len equ $ - url_prefix
 url_suffix: db '/messages'
 url_suffix_len equ $ - url_suffix
+guild_ban_prefix: db 'https://discord.com/api/v10/guilds/'
+guild_ban_prefix_len equ $ - guild_ban_prefix
+guild_ban_middle: db '/bans/'
+guild_ban_middle_len equ $ - guild_ban_middle
 guild_role_prefix: db 'https://discord.com/api/v10/guilds/'
 guild_role_prefix_len equ $ - guild_role_prefix
 guild_role_middle: db '/members/'
@@ -522,6 +627,7 @@ section .data
 response_status: dq 0
 role_id_ptr: dq 0
 role_id_len: dd 0
+guild_ban_url_len: dq 0
 
 section .bss
 request_url: resb REQUEST_URL_CAP

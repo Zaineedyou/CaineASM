@@ -10,6 +10,7 @@ global guild_auth_member_highest_position
 global guild_auth_bot_above_member
 global guild_auth_cache_bot_member
 global guild_auth_bot_above_roles
+global guild_auth_get_bot_roles
 global guild_auth_is_owner
 global guild_auth_is_manager
 global guild_auth_roles_have
@@ -1158,6 +1159,31 @@ guild_auth_cache_bot_member:
 .out:
     pop r15
     pop r14
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len. RAX=role array pointer and EDX=len only for a
+; complete cached bot member; RAX=0/EDX=0 when unavailable.
+guild_auth_get_bot_roles:
+    push r12
+    push r13
+    mov r12, rdi
+    mov r13d, esi
+    test r12, r12
+    jz .no
+    test r13d, r13d
+    jle .no
+    call find_existing_bot_member
+    test rax, rax
+    jz .no
+    mov edx, [rax + 8]
+    lea rax, [rax + 16 + ID_CAP]
+    jmp .out
+.no:
+    xor eax, eax
+    xor edx, edx
+.out:
     pop r13
     pop r12
     ret

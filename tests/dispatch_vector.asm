@@ -26,6 +26,8 @@ global state_format_banned_words
 global guild_auth_is_manager
 global guild_auth_roles_have
 global channel_auth_resolve
+global guild_auth_get_bot_roles
+global discord_unban_member
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -698,6 +700,39 @@ _start:
     cmp qword [send_calls], 33
     jne .fail
 
+    ; Unban requires the caller gate and a separate effective permission for
+    ; the bot. Missing bot state must not reach the destructive REST route.
+    mov dword [failure_stage], 35
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [unban_event]
+    mov esi, unban_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [unban_calls], 0
+    jne .fail
+    cmp qword [send_calls], 34
+    jne .fail
+
+    mov dword [failure_stage], 36
+    mov byte [bot_permission_enabled], 1
+    lea rax, [unban_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], unban_success_response_len
+    lea rdi, [unban_event]
+    mov esi, unban_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [unban_calls], 1
+    jne .fail
+    cmp qword [send_calls], 35
+    jne .fail
+    mov byte [bot_permission_enabled], 0
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -975,7 +1010,28 @@ discord_delete_message:
 ; Existing command fixtures use a complete, permissive channel snapshot. Exact
 ; overwrite ordering is covered independently by channel_permissions_vector.
 channel_auth_resolve:
+    cmp byte [bot_permission_enabled], 1
+    jne .deny
+    mov eax, 4
+    ret
+.deny:
     mov rax, -1
+    ret
+
+guild_auth_get_bot_roles:
+    cmp byte [bot_permission_enabled], 1
+    jne .none
+    lea rax, [bot_roles]
+    mov edx, bot_roles_len
+    ret
+.none:
+    xor eax, eax
+    xor edx, edx
+    ret
+
+discord_unban_member:
+    inc qword [unban_calls]
+    xor eax, eax
     ret
 
 guild_auth_roles_have:
@@ -1337,6 +1393,8 @@ ai_response: db 'AI summary'
 ai_response_len equ $ - ai_response
 unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^kick","author":{"bot":false}}}'
 unknown_event_len equ $ - unknown_event
+unban_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^unban 998877665544332211","author":{"id":"user-2","bot":false}}}'
+unban_event_len equ $ - unban_event
 addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
 addword_event_len equ $ - addword_event
 words_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^words","author":{"id":"user-2","bot":false}}}'
@@ -1417,6 +1475,10 @@ leaderboard_response: db 'XP leaderboard:', 10, '1. user-2 - 3 XP', 10
 leaderboard_response_len equ $ - leaderboard_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
+bot_denied_response: db 'Bot lacks the required effective channel permission.'
+bot_denied_response_len equ $ - bot_denied_response
+unban_success_response: db 'User unbanned.'
+unban_success_response_len equ $ - unban_success_response
 words_response: db 'Banned words:', 10, '- bad', 10
 words_response_len equ $ - words_response
 word_added_response: db 'Banned word added.'
@@ -1530,3 +1592,7 @@ expected_vision_ptr: dq 0
 expected_vision_len: dd 0
 reply_mode: dd REPLY_NONE
 reply_get_calls: dq 0
+unban_calls: dq 0
+bot_permission_enabled: db 0
+bot_roles: db '["2002"]'
+bot_roles_len equ $ - bot_roles

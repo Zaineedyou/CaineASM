@@ -4,6 +4,7 @@ DEFAULT REL
 extern discord_send_text
 extern discord_delete_message
 extern discord_get_json
+extern discord_unban_member
 extern discord_add_member_role
 extern json_escape_append
 
@@ -25,6 +26,9 @@ _start:
     mov qword [mock_status], 201
     mov qword [mock_calls], 0
     mov dword [mock_failure_reason], 0
+    lea rax, [expected_delete_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_delete_url_len
 
     mov dword [failure_stage], 1
     ; Direct helper coverage: all JSON-sensitive bytes are escaped boundedly.
@@ -121,6 +125,37 @@ _start:
     jne .fail
     cmp qword [delete_calls], 1
     jne .fail
+
+    mov dword [failure_stage], 75
+    mov qword [delete_status], 204
+    lea rax, [expected_unban_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_unban_url_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    call discord_unban_member
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 76
+    mov qword [delete_status], 403
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    call discord_unban_member
+    cmp eax, -1
+    jne .fail
+    cmp qword [delete_calls], 3
+    jne .fail
+    mov qword [delete_status], 204
+    lea rax, [expected_delete_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_delete_url_len
 
     mov dword [failure_stage], 8
     mov qword [get_status], 200
@@ -266,8 +301,8 @@ secure_https_post_json:
 
 ; RDI=url, RSI=authorization, RDX=response, RCX=response cap, R8=status out.
 secure_https_delete:
-    lea r10, [expected_delete_url]
-    mov r11d, expected_delete_url_len
+    mov r10, [expected_delete_ptr]
+    mov r11d, [expected_delete_len]
     call equal_cstring
     test al, al
     jz .delete_fail
@@ -428,6 +463,12 @@ expected_role_url: db 'https://discord.com/api/v10/guilds/123456789012345678/mem
 expected_role_url_len equ $ - expected_role_url
 expected_delete_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/987654321098765432'
 expected_delete_url_len equ $ - expected_delete_url
+guild_id: db '123456789012345678'
+guild_id_len equ $ - guild_id
+user_id: db '987654321098765432'
+user_id_len equ $ - user_id
+expected_unban_url: db 'https://discord.com/api/v10/guilds/123456789012345678/bans/987654321098765432'
+expected_unban_url_len equ $ - expected_unban_url
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_get_url_len equ $ - expected_get_url
 bad_get_url: db 'https://example.invalid/api/v10/guilds/1'
@@ -447,6 +488,8 @@ discord_token_len: dd 0
 mock_status: dq 0
 mock_calls: dq 0
 delete_status: dq 0
+expected_delete_ptr: dq 0
+expected_delete_len: dd 0
 delete_calls: dq 0
 get_calls: dq 0
 get_status: dq 0

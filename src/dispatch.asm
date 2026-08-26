@@ -31,6 +31,8 @@ extern state_format_banned_words
 extern guild_auth_is_manager
 extern guild_auth_roles_have
 extern channel_auth_resolve
+extern guild_auth_get_bot_roles
+extern discord_unban_member
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -67,6 +69,7 @@ extern discord_get_json
 %define REPLY_REFERENCE_RESPONSE_CAP 4096
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
+%define PERMISSION_BAN_MEMBERS 4
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -95,6 +98,7 @@ extern discord_get_json
 %define CMD_SETGOODBYEMSG 32
 %define CMD_WARNINGS 33
 %define CMD_CLEARWARN 34
+%define CMD_UNBAN 35
 %define CMD_REPORT 39
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
@@ -370,6 +374,8 @@ dispatch_message_create:
     je .warnings
     cmp eax, CMD_CLEARWARN
     je .clearwarn
+    cmp eax, CMD_UNBAN
+    je .unban
     cmp eax, CMD_REPORT
     je .report
     cmp eax, CMD_ADDWORD
@@ -762,6 +768,14 @@ dispatch_message_create:
     lea rdi, [admin_denied_response]
     mov esi, admin_denied_response_len
     jmp .reply
+.bot_denied:
+    lea rdi, [bot_denied_response]
+    mov esi, bot_denied_response_len
+    jmp .reply
+.moderation_error:
+    lea rdi, [moderation_error_response]
+    mov esi, moderation_error_response_len
+    jmp .reply
 .policy_error:
     lea rdi, [policy_error_response]
     mov esi, policy_error_response_len
@@ -1087,6 +1101,36 @@ dispatch_message_create:
     add esi, warning_reply_prefix_len + warning_reply_suffix_len
     lea rdi, [warning_reply]
     jmp .reply
+.unban:
+    mov r8, PERMISSION_BAN_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_BAN_MEMBERS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .unban_usage
+    call dispatch_copy_first_lower
+    test eax, eax
+    jle .unban_usage
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [argument_buffer]
+    mov ecx, eax
+    call discord_unban_member
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [unban_success_response]
+    mov esi, unban_success_response_len
+    jmp .reply
+.unban_usage:
+    lea rdi, [unban_usage_response]
+    mov esi, unban_usage_response_len
+    jmp .reply
+
 .clearwarn:
     mov r8, PERMISSION_KICK_MEMBERS
     call dispatch_has_permission
@@ -1817,6 +1861,52 @@ dispatch_owner_authorized:
     xor eax, eax
     ret
 
+; R8=requested Discord permission bitset. AL=1 only if the READY-cached bot
+; has a complete role snapshot and its effective permission includes the bit.
+dispatch_bot_has_permission:
+    push rbx
+    push r12
+    push r14
+    mov r14, r8
+    cmp dword [guild_id_len], 0
+    je .no
+    cmp dword [channel_id_len], 0
+    je .no
+    cmp dword [gateway_bot_user_id_len], 0
+    je .no
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call guild_auth_get_bot_roles
+    test rax, rax
+    jz .no
+    test edx, edx
+    jle .no
+    mov rbx, rax
+    mov r12d, edx
+    push r12
+    push rbx
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [channel_id]
+    mov ecx, [channel_id_len]
+    lea r8, [gateway_bot_user_id]
+    mov r9d, [gateway_bot_user_id_len]
+    call channel_auth_resolve
+    add rsp, 16
+    test rax, rax
+    js .no
+    test rax, r14
+    jz .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r14
+    pop r12
+    pop rbx
+    ret
+
 ; R8=requested Discord permission bitset. BOT_OWNER_ID and cached guild owner
 ; retain their source bypass; all other callers require a complete bounded
 ; GUILD_CREATE role/channel snapshot and effective channel permissions.
@@ -2225,6 +2315,14 @@ ai_error_response: db 'AI request failed. Please try again shortly.'
 ai_error_response_len equ $ - ai_error_response
 ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
 ai_rate_limited_response_len equ $ - ai_rate_limited_response
+unban_usage_response: db 'Usage: unban <user-id>'
+unban_usage_response_len equ $ - unban_usage_response
+unban_success_response: db 'User unbanned.'
+unban_success_response_len equ $ - unban_success_response
+bot_denied_response: db 'Bot lacks the required effective channel permission.'
+bot_denied_response_len equ $ - bot_denied_response
+moderation_error_response: db 'Moderation request failed.'
+moderation_error_response_len equ $ - moderation_error_response
 chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
 chat_default_prompt_len equ $ - chat_default_prompt
 key_message_reference: db 'message_reference'
