@@ -24,6 +24,7 @@ global guild_channel_disable
 global guild_channel_enable
 global guild_channel_is_disabled
 global guild_config_set
+global guild_config_get
 global guild_config_delete
 global warnings_add
 global warnings_get
@@ -416,8 +417,39 @@ _start:
     cmp qword [send_calls], 22
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 25
+    lea rax, [report_log_channel_value]
+    mov [expected_channel_ptr], rax
+    mov dword [expected_channel_len], report_log_channel_value_len
+    lea rax, [report_log_text]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], report_log_text_len
+    mov dword [report_log_enabled], 1
+    mov dword [report_followup_enabled], 1
+    lea rdi, [report_event]
+    mov esi, report_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [config_get_calls], 1
+    jne .fail
+    cmp qword [send_calls], 24
+    jne .fail
+
+    mov dword [failure_stage], 26
+    mov dword [report_log_enabled], 0
+    lea rdi, [report_event]
+    mov esi, report_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [config_get_calls], 2
+    jne .fail
+    cmp qword [send_calls], 25
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 27
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -426,7 +458,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 23
+    cmp qword [send_calls], 26
     jne .fail
 
     mov eax, SYS_EXIT
@@ -590,6 +622,18 @@ guild_config_set:
     pop rbx
     ret
 
+guild_config_get:
+    inc qword [config_get_calls]
+    cmp dword [report_log_enabled], 0
+    je .absent
+    lea rax, [report_log_channel_value]
+    mov edx, report_log_channel_value_len
+    ret
+.absent:
+    xor eax, eax
+    xor edx, edx
+    ret
+
 guild_config_delete:
     inc qword [config_delete_calls]
     xor eax, eax
@@ -746,10 +790,17 @@ afk_set:
 discord_send_text:
     mov r10d, ecx
     mov r11, rdx
-    cmp esi, channel_id_len
-    jne .bad
+    mov r8, [expected_channel_ptr]
+    test r8, r8
+    jnz .expected_channel
     lea r8, [channel_id]
-    mov r9d, esi
+    mov r9d, channel_id_len
+    jmp .channel_ready
+.expected_channel:
+    mov r9d, [expected_channel_len]
+.channel_ready:
+    cmp esi, r9d
+    jne .bad
     mov rsi, r8
     mov edx, r9d
     call equal_bytes
@@ -764,6 +815,15 @@ discord_send_text:
     test al, al
     jz .bad
     inc qword [send_calls]
+    cmp dword [report_followup_enabled], 0
+    je .ok
+    mov dword [report_followup_enabled], 0
+    mov qword [expected_channel_ptr], 0
+    mov dword [expected_channel_len], 0
+    lea rax, [report_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], report_saved_response_len
+.ok:
     xor eax, eax
     ret
 .bad:
@@ -868,6 +928,8 @@ warnings_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","chan
 warnings_event_len equ $ - warnings_event
 clearwarn_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^clearwarn <@555>","author":{"id":"user-2","bot":false}}}'
 clearwarn_event_len equ $ - clearwarn_event
+report_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^report <@555> flooding chat","author":{"id":"112233445566778899","bot":false}}}'
+report_event_len equ $ - report_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -938,6 +1000,12 @@ warning_reply: db 'Warnings: 3.'
 warning_reply_len equ $ - warning_reply
 clearwarn_response: db 'Warnings cleared.'
 clearwarn_response_len equ $ - clearwarn_response
+report_saved_response: db 'Report sent to the guild log channel.'
+report_saved_response_len equ $ - report_saved_response
+report_log_text: db 'REPORT', 10, 'Reporter: <@112233445566778899>', 10, 'Target: <@555>', 10, 'Reason: flooding chat', 10, 'Channel: <#123456789012345678>'
+report_log_text_len equ $ - report_log_text
+report_log_channel_value: db '998877665544332211'
+report_log_channel_value_len equ $ - report_log_channel_value
 
 section .data
 bot_prefix_ptr: dq 0
@@ -959,6 +1027,11 @@ channel_disable_calls: dq 0
 channel_enable_calls: dq 0
 config_set_calls: dq 0
 config_delete_calls: dq 0
+config_get_calls: dq 0
+expected_channel_ptr: dq 0
+expected_channel_len: dd 0
+report_followup_enabled: dd 0
+report_log_enabled: dd 0
 delete_calls: dq 0
 automod_enabled: dd 0
 warnings_add_calls: dq 0

@@ -29,6 +29,7 @@ extern guild_channel_disable
 extern guild_channel_enable
 extern guild_channel_is_disabled
 extern guild_config_set
+extern guild_config_get
 extern guild_config_delete
 extern warnings_add
 extern warnings_get
@@ -43,6 +44,7 @@ extern bot_prefix_len
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
 %define STATE_VIEW_REPLY_CAP 2000
+%define REPORT_LOG_CAP 2000
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 
@@ -73,6 +75,7 @@ extern bot_prefix_len
 %define CMD_SETGOODBYEMSG 32
 %define CMD_WARNINGS 33
 %define CMD_CLEARWARN 34
+%define CMD_REPORT 39
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -326,6 +329,8 @@ dispatch_message_create:
     je .warnings
     cmp eax, CMD_CLEARWARN
     je .clearwarn
+    cmp eax, CMD_REPORT
+    je .report
     cmp eax, CMD_ADDWORD
     je .addword
     cmp eax, CMD_REMOVEWORD
@@ -935,6 +940,117 @@ dispatch_message_create:
     lea rdi, [clearwarn_response]
     mov esi, clearwarn_response_len
     jmp .reply
+.report:
+    cmp dword [guild_id_len], 0
+    je .report_usage
+    cmp dword [author_id_len], 0
+    je .report_usage
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .report_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .report_usage
+    mov [report_target_len], eax
+    mov dword [report_log_len], 0
+    lea rdi, [report_log_prefix]
+    mov esi, report_log_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [report_mention_prefix]
+    mov esi, report_mention_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [report_target_label]
+    mov esi, report_target_label_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [config_value]
+    mov esi, [report_target_len]
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [report_reason_label]
+    mov esi, report_reason_label_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_tail_after_mention
+    test esi, esi
+    jle .report_default_reason
+    call report_append_sanitized
+    test eax, eax
+    js .report_ack
+    jmp .report_channel_label
+.report_default_reason:
+    lea rdi, [report_default_reason]
+    mov esi, report_default_reason_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+.report_channel_label:
+    lea rdi, [report_channel_label]
+    mov esi, report_channel_label_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [report_channel_mention_prefix]
+    mov esi, report_channel_mention_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [channel_id]
+    mov esi, r14d
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [report_channel_mention_suffix]
+    mov esi, report_channel_mention_suffix_len
+    call report_append_bytes
+    test eax, eax
+    js .report_ack
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .report_ack
+    test edx, edx
+    jle .report_ack
+    cmp edx, CHANNEL_ID_CAP - 1
+    ja .report_ack
+    mov ebx, edx
+    mov rsi, rax
+    lea rdi, [report_log_channel]
+    mov edx, ebx
+    call copy_bytes
+    lea rdi, [report_log_channel]
+    mov esi, ebx
+    lea rdx, [report_log]
+    mov ecx, [report_log_len]
+    call discord_send_text
+.report_ack:
+    lea rdi, [report_saved_response]
+    mov esi, report_saved_response_len
+    jmp .reply
+.report_usage:
+    lea rdi, [report_usage_response]
+    mov esi, report_usage_response_len
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
@@ -1072,6 +1188,38 @@ dispatch_tail_after_command:
     xor esi, esi
     mov qword [dispatch_tail_ptr], 0
     mov dword [dispatch_tail_len], 0
+    ret
+
+; RDI=tail bytes, ESI=len. Returns the non-space bytes after the first closing
+; mention delimiter in RDI/ESI, or an empty tail when no bounded delimiter exists.
+dispatch_tail_after_mention:
+    xor eax, eax
+.find_end:
+    cmp eax, esi
+    jae .empty
+    cmp byte [rdi + rax], '>'
+    je .after_end
+    inc eax
+    jmp .find_end
+.after_end:
+    inc eax
+.skip_spaces:
+    cmp eax, esi
+    jae .empty
+    mov dl, [rdi + rax]
+    cmp dl, ' '
+    je .space
+    cmp dl, 9
+    je .space
+    add rdi, rax
+    sub esi, eax
+    ret
+.space:
+    inc eax
+    jmp .skip_spaces
+.empty:
+    add rdi, rsi
+    xor esi, esi
     ret
 
 ; RDI=tail bytes, ESI=len, DL='#' for <#id> or '&' for <@&id>.
@@ -1451,6 +1599,68 @@ command_offset_after_prefix:
     mov eax, -1
     ret
 
+; RDI=source, ESI=len. EAX=output len or -1 if report buffer cannot hold all bytes.
+report_append_bytes:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jl .bad
+    mov r8d, [report_log_len]
+    mov eax, r8d
+    add eax, esi
+    cmp eax, REPORT_LOG_CAP
+    ja .bad
+    xor ecx, ecx
+.copy:
+    cmp ecx, esi
+    jae .done
+    mov dl, [rdi + rcx]
+    mov [report_log + r8 + rcx], dl
+    inc ecx
+    jmp .copy
+.done:
+    add dword [report_log_len], esi
+    mov eax, [report_log_len]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+; RDI=source, ESI=len. Non-printable ASCII is replaced with '?'.
+; EAX=output len or -1 if report buffer cannot hold all bytes.
+report_append_sanitized:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jl .bad
+    mov eax, [report_log_len]
+    add eax, esi
+    cmp eax, REPORT_LOG_CAP
+    ja .bad
+    xor ecx, ecx
+.copy:
+    cmp ecx, esi
+    jae .done
+    mov dl, [rdi + rcx]
+    cmp dl, 32
+    jb .replace
+    cmp dl, 126
+    jbe .store
+.replace:
+    mov dl, '?'
+.store:
+    mov eax, [report_log_len]
+    mov [report_log + rax], dl
+    inc dword [report_log_len]
+    inc ecx
+    jmp .copy
+.done:
+    mov eax, [report_log_len]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 section .rodata
 key_bot: db 'bot'
 key_bot_len equ $ - key_bot
@@ -1470,6 +1680,26 @@ key_content: db 'content'
 key_content_len equ $ - key_content
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
+report_usage_response: db 'Usage: report @user [reason].'
+report_usage_response_len equ $ - report_usage_response
+report_saved_response: db 'Report sent to the guild log channel.'
+report_saved_response_len equ $ - report_saved_response
+report_log_prefix: db 'REPORT', 10, 'Reporter: '
+report_log_prefix_len equ $ - report_log_prefix
+report_mention_prefix: db '<@'
+report_mention_prefix_len equ $ - report_mention_prefix
+report_target_label: db '>', 10, 'Target: <@'
+report_target_label_len equ $ - report_target_label
+report_reason_label: db '>', 10, 'Reason: '
+report_reason_label_len equ $ - report_reason_label
+report_default_reason: db 'Tidak ada alasan'
+report_default_reason_len equ $ - report_default_reason
+report_channel_label: db 10, 'Channel: '
+report_channel_label_len equ $ - report_channel_label
+report_channel_mention_prefix: db '<#'
+report_channel_mention_prefix_len equ $ - report_channel_mention_prefix
+report_channel_mention_suffix: db '>'
+report_channel_mention_suffix_len equ $ - report_channel_mention_suffix
 warn_usage_response: db 'Usage: warn/clearwarn @user.'
 warn_usage_response_len equ $ - warn_usage_response
 clearwarn_response: db 'Warnings cleared.'
@@ -1623,6 +1853,10 @@ config_value_len: resd 1
 config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
 warning_target_len: resd 1
+report_target_len: resd 1
+report_log_len: resd 1
+report_log_channel: resb CHANNEL_ID_CAP
+report_log: resb REPORT_LOG_CAP
 warning_reply: resb 64
 rank_response: resb 32
 rank_scratch: resb 10
