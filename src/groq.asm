@@ -3,6 +3,7 @@ DEFAULT REL
 
 global groq_chat_once
 global groq_select_guild
+global groq_select_history
 
 extern secure_https_post_json
 extern groq_key_ptr
@@ -11,6 +12,8 @@ extern json_escape_append
 extern json_find_key
 extern json_read_string
 extern guild_config_get
+extern history_visit_recent
+extern history_append
 
 %define SYS_NANOSLEEP 35
 
@@ -20,6 +23,8 @@ extern guild_config_get
 %define GROQ_BODY_CAP 4096
 %define GROQ_RESPONSE_CAP 8192
 %define GROQ_RETRIES 3
+%define GROQ_HISTORY_MAX 2
+%define GROQ_HISTORY_KEY_MAX 63
 
 ; RDI=prompt bytes, ESI=prompt length, RDX=reply destination, ECX=reply capacity.
 ; EAX=decoded reply length on HTTP success, -1 on validation, transport, API, or parse failure.
@@ -33,6 +38,8 @@ groq_chat_once:
     push r15
     mov r12, rdi
     mov r13d, esi
+    mov [current_prompt_ptr], r12
+    mov [current_prompt_len], r13d
     mov r14, rdx
     mov r15d, ecx
     test r12, r12
@@ -99,6 +106,23 @@ groq_chat_once:
     call request_append_bytes
     test eax, eax
     js .bad
+    mov rdi, [selected_history_key_ptr]
+    mov esi, [selected_history_key_len]
+    test rdi, rdi
+    jz .history_done
+    test esi, esi
+    jle .history_done
+    lea rdx, [groq_history_callback]
+    mov ecx, GROQ_HISTORY_MAX
+    call history_visit_recent
+    test eax, eax
+    js .bad
+.history_done:
+    lea rdi, [request_before_user]
+    mov esi, request_before_user_len
+    call request_append_bytes
+    test eax, eax
+    js .bad
     mov rdi, r12
     mov esi, r13d
     call request_append_escaped
@@ -147,6 +171,9 @@ groq_chat_once:
     test eax, eax
     jle .bad
     mov byte [r14 + rax], 0
+    mov [last_reply_len], eax
+    call groq_store_history
+    mov eax, [last_reply_len]
     jmp .out
 .retryable_status:
     cmp rax, 429
@@ -170,6 +197,23 @@ groq_chat_once:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=history key, ESI=history key len. The selection is process-local and is
+; consumed by the next successful groq_chat_once call. Invalid/missing input clears it.
+groq_select_history:
+    mov qword [selected_history_key_ptr], 0
+    mov dword [selected_history_key_len], 0
+    test rdi, rdi
+    jz .done
+    test esi, esi
+    jle .done
+    cmp esi, GROQ_HISTORY_KEY_MAX
+    ja .done
+    mov [selected_history_key_ptr], rdi
+    mov [selected_history_key_len], esi
+.done:
+    xor eax, eax
     ret
 
 ; RDI=guild, ESI=guild len. Selects bounded stored model/persona for the next
@@ -218,6 +262,98 @@ groq_select_guild:
     mov [selected_persona_len], edx
 .done:
     xor eax, eax
+    pop r13
+    pop r12
+    ret
+
+; history_visit_recent callback. RDI=role, ESI=role len, RDX=content, ECX=content len.
+; Only source-compatible user/assistant entries are included in the Groq message list.
+groq_history_callback:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    cmp r13d, role_user_len
+    je .user_role
+    cmp r13d, role_assistant_len
+    jne .done
+    lea rdi, [role_assistant]
+    mov esi, role_assistant_len
+    jmp .role_ready
+.user_role:
+    lea rdi, [role_user]
+    mov esi, role_user_len
+.role_ready:
+    mov [history_role_ptr], rdi
+    mov [history_role_len], esi
+    lea rdi, [request_history_prefix]
+    mov esi, request_history_prefix_len
+    call request_append_bytes
+    test eax, eax
+    js .bad
+    mov rdi, [history_role_ptr]
+    mov esi, [history_role_len]
+    call request_append_bytes
+    test eax, eax
+    js .bad
+    lea rdi, [request_history_middle]
+    mov esi, request_history_middle_len
+    call request_append_bytes
+    test eax, eax
+    js .bad
+    mov rdi, r14
+    mov esi, r15d
+    call request_append_escaped
+    test eax, eax
+    js .bad
+    lea rdi, [request_history_suffix]
+    mov esi, request_history_suffix_len
+    call request_append_bytes
+    test eax, eax
+    js .bad
+.done:
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; Saves the successful roundtrip only after a reply has been decoded.
+groq_store_history:
+    push r12
+    push r13
+    cmp qword [selected_history_key_ptr], 0
+    je .done
+    mov r12, [selected_history_key_ptr]
+    mov r13d, [selected_history_key_len]
+    test r12, r12
+    jz .done
+    test r13d, r13d
+    jle .done
+    mov rdi, r12
+    mov esi, r13d
+    lea rdx, [role_user]
+    mov ecx, role_user_len
+    mov r8, [current_prompt_ptr]
+    mov r9d, [current_prompt_len]
+    call history_append
+    mov rdi, r12
+    mov esi, r13d
+    lea rdx, [role_assistant]
+    mov ecx, role_assistant_len
+    mov r8, r14
+    mov r9d, [last_reply_len]
+    call history_append
+.done:
     pop r13
     pop r12
     ret
@@ -327,8 +463,16 @@ request_prefix: db '{"model":"'
 request_prefix_len equ $ - request_prefix
 request_after_model: db '","messages":[{"role":"system","content":"'
 request_after_model_len equ $ - request_after_model
-request_after_persona: db '"},{"role":"user","content":"'
+request_after_persona: db '"'
 request_after_persona_len equ $ - request_after_persona
+request_history_prefix: db '},{"role":"'
+request_history_prefix_len equ $ - request_history_prefix
+request_history_middle: db '","content":"'
+request_history_middle_len equ $ - request_history_middle
+request_history_suffix: db '"'
+request_history_suffix_len equ $ - request_history_suffix
+request_before_user: db '},{"role":"user","content":"'
+request_before_user_len equ $ - request_before_user
 request_suffix: db '"}],"max_completion_tokens":512,"temperature":0.7}'
 request_suffix_len equ $ - request_suffix
 key_content: db 'content'
@@ -342,6 +486,10 @@ default_model: db 'llama-3.3-70b-versatile'
 default_model_len equ $ - default_model
 default_persona: db 'You are CaineASM, a concise Discord assistant.'
 default_persona_len equ $ - default_persona
+role_user: db 'user'
+role_user_len equ $ - role_user
+role_assistant: db 'assistant'
+role_assistant_len equ $ - role_assistant
 
 section .data
 response_status: dq 0
@@ -351,6 +499,13 @@ selected_model_ptr: dq default_model
 selected_model_len: dd default_model_len
 selected_persona_ptr: dq default_persona
 selected_persona_len: dd default_persona_len
+selected_history_key_ptr: dq 0
+selected_history_key_len: dd 0
+current_prompt_ptr: dq 0
+current_prompt_len: dd 0
+last_reply_len: dd 0
+history_role_ptr: dq 0
+history_role_len: dd 0
 
 section .bss
 authorization: resb GROQ_AUTH_CAP

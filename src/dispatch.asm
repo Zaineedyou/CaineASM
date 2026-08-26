@@ -13,6 +13,8 @@ extern discord_send_text
 extern discord_delete_message
 extern groq_chat_once
 extern groq_select_guild
+extern groq_select_history
+extern history_clear
 extern afk_set
 extern afk_clear
 extern xp_increment
@@ -43,6 +45,7 @@ extern bot_prefix_len
 %define AUTHOR_ID_CAP 64
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
+%define HISTORY_KEY_CAP 64
 %define STATE_VIEW_REPLY_CAP 2000
 %define REPORT_LOG_CAP 2000
 %define PERMISSION_ADMINISTRATOR 8
@@ -303,6 +306,7 @@ dispatch_message_create:
 .classify:
     test ecx, ecx
     jz .handled
+    mov [command_start], ebx
     add ebx, ecx                     ; first byte after command token
     lea rdi, [command_buffer]
     mov esi, ecx
@@ -321,7 +325,7 @@ dispatch_message_create:
     je .status
     cmp eax, CMD_RESET
     je .reset
-    cmp eax, CMD_SUMMARIZE
+        cmp eax, CMD_SUMMARIZE
     je .summarize
     cmp eax, CMD_WARN
     je .warn
@@ -364,10 +368,80 @@ dispatch_message_create:
     cmp eax, CMD_SETGOODBYEMSG
     je .setgoodbyemsg
     test eax, eax
-    jz .unknown
+    jz .chat
     lea rdi, [registered_notice]
     mov esi, registered_notice_len
     jmp .reply
+.chat:
+    mov eax, [command_start]
+    lea rdi, [message_content + rax]
+    mov esi, r15d
+    sub esi, eax
+    mov [dispatch_tail_ptr], rdi
+    mov [dispatch_tail_len], esi
+    call dispatch_select_history_key
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call groq_select_guild
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    test esi, esi
+    jg .chat_groq
+    lea rdi, [chat_default_prompt]
+    mov esi, chat_default_prompt_len
+.chat_groq:
+    lea rdx, [ai_reply]
+    mov ecx, AI_REPLY_CAP
+    call groq_chat_once
+    test eax, eax
+    jle .ai_error
+    lea rdi, [ai_reply]
+    mov esi, eax
+    jmp .reply
+.summarize:
+.skip_prompt_spaces:
+    cmp ebx, r15d
+    jae .summarize_usage
+    mov al, [message_content + rbx]
+    cmp al, ' '
+    je .prompt_space_advance
+    cmp al, 9
+    je .prompt_space_advance
+    jmp .ask_groq
+.prompt_space_advance:
+    inc ebx
+    jmp .skip_prompt_spaces
+.ask_groq:
+    call dispatch_select_history_key
+    lea rdi, [history_key]
+    mov esi, [history_key_len]
+    call history_clear
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call groq_select_guild
+    lea rdi, [message_content + rbx]
+    mov esi, r15d
+    sub esi, ebx
+    lea rdx, [ai_reply]
+    mov ecx, AI_REPLY_CAP
+    call groq_chat_once
+    test eax, eax
+    jle .ai_error
+    lea rdi, [ai_reply]
+    mov esi, eax
+    jmp .reply
+.summarize_usage:
+    lea rdi, [summarize_usage_response]
+    mov esi, summarize_usage_response_len
+    jmp .reply
+.ai_error:
+    lea rdi, [ai_error_response]
+    mov esi, ai_error_response_len
+    jmp .reply
+.unknown:
+    lea rdi, [unknown_response]
+    mov esi, unknown_response_len
+
 .help:
     lea rdi, [help_response]
     mov esi, help_response_len
@@ -1079,45 +1153,6 @@ dispatch_message_create:
     lea rdi, [reset_response]
     mov esi, reset_response_len
     jmp .reply
-.summarize:
-.skip_prompt_spaces:
-    cmp ebx, r15d
-    jae .summarize_usage
-    mov al, [message_content + rbx]
-    cmp al, ' '
-    je .prompt_space_advance
-    cmp al, 9
-    je .prompt_space_advance
-    jmp .ask_groq
-.prompt_space_advance:
-    inc ebx
-    jmp .skip_prompt_spaces
-.ask_groq:
-    lea rdi, [guild_id]
-    mov esi, [guild_id_len]
-    call groq_select_guild
-    lea rdi, [message_content + rbx]
-    mov esi, r15d
-    sub esi, ebx
-    lea rdx, [ai_reply]
-    mov ecx, AI_REPLY_CAP
-    call groq_chat_once
-    test eax, eax
-    jle .ai_error
-    lea rdi, [ai_reply]
-    mov esi, eax
-    jmp .reply
-.summarize_usage:
-    lea rdi, [summarize_usage_response]
-    mov esi, summarize_usage_response_len
-    jmp .reply
-.ai_error:
-    lea rdi, [ai_error_response]
-    mov esi, ai_error_response_len
-    jmp .reply
-.unknown:
-    lea rdi, [unknown_response]
-    mov esi, unknown_response_len
 .reply:
     mov rdx, rdi
     mov ecx, esi
@@ -1162,6 +1197,57 @@ dispatch_store_config:
     ret
 
 ; Skip command whitespace. RDI=tail pointer, ESI=tail length.
+; Selects a source-compatible history key and gives it to the Groq builder.
+; Server histories are channel scoped; direct messages are author scoped.
+dispatch_select_history_key:
+    mov dword [history_key_len], 0
+    cmp dword [guild_id_len], 0
+    je .dm
+    lea rdi, [history_key]
+    lea rsi, [history_server_prefix]
+    mov edx, history_server_prefix_len
+    call copy_bytes
+    mov eax, history_server_prefix_len
+    mov ecx, r14d
+    add eax, ecx
+    cmp eax, HISTORY_KEY_CAP - 1
+    ja .clear
+    lea rdi, [history_key + history_server_prefix_len]
+    lea rsi, [channel_id]
+    mov edx, ecx
+    call copy_bytes
+    mov [history_key_len], eax
+    jmp .select
+.dm:
+    cmp dword [author_id_len], 0
+    jle .clear
+    mov eax, history_dm_prefix_len
+    mov ecx, [author_id_len]
+    add eax, ecx
+    cmp eax, HISTORY_KEY_CAP - 1
+    ja .clear
+    lea rdi, [history_key]
+    lea rsi, [history_dm_prefix]
+    mov edx, history_dm_prefix_len
+    call copy_bytes
+    lea rdi, [history_key + history_dm_prefix_len]
+    lea rsi, [author_id]
+    mov edx, ecx
+    call copy_bytes
+    mov [history_key_len], eax
+    jmp .select
+.clear:
+    xor edi, edi
+    xor esi, esi
+    call groq_select_history
+    ret
+.select:
+    lea rdi, [history_key]
+    mov esi, [history_key_len]
+    call groq_select_history
+    ret
+
+; RDI=tail bytes, ESI=tail length. RDI/ESI return text after command whitespace.
 dispatch_tail_after_command:
     mov eax, ebx
 .skip:
@@ -1814,6 +1900,12 @@ unknown_response_len equ $ - unknown_response
 summarize_usage_response: db 'Usage: !summarize <text>'
 summarize_usage_response_len equ $ - summarize_usage_response
 ai_error_response: db 'AI request failed. Please try again shortly.'
+chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
+chat_default_prompt_len equ $ - chat_default_prompt
+history_server_prefix: db 'server-'
+history_server_prefix_len equ $ - history_server_prefix
+history_dm_prefix: db 'dm-'
+history_dm_prefix_len equ $ - history_dm_prefix
 ai_error_response_len equ $ - ai_error_response
 afk_response: db 'AFK status saved for this server.'
 afk_response_len equ $ - afk_response
@@ -1864,3 +1956,6 @@ message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP
 state_view_reply: resb STATE_VIEW_REPLY_CAP
+history_key_len: resd 1
+command_start: resd 1
+history_key: resb HISTORY_KEY_CAP

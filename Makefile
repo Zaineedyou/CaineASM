@@ -152,7 +152,7 @@ test-gateway: $(GATEWAY_TEST)
 $(BUILD_DIR)/groq-vector.o: tests/groq_vector.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
-$(GROQ_TEST): $(BUILD_DIR)/groq-vector.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/json.o
+$(GROQ_TEST): $(BUILD_DIR)/groq-vector.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/json.o $(BUILD_DIR)/history.o
 	ld -static -z noexecstack -o $@ $^
 
 test-groq: $(GROQ_TEST)

@@ -3,6 +3,7 @@ DEFAULT REL
 
 extern groq_chat_once
 extern groq_select_guild
+extern groq_select_history
 
 global _start
 global secure_https_post_json
@@ -60,8 +61,44 @@ _start:
     cmp qword [mock_calls], 2
     jne .fail
 
-    ; Non-retriable HTTP errors return failure instead of accepting error JSON.
+    ; A selected conversation key stores successful user/assistant turns and
+    ; serializes the newest bounded context on the next request.
     mov dword [failure_stage], 3
+    lea rdi, [history_key]
+    mov esi, history_key_len
+    call groq_select_history
+    lea rax, [expected_history_first_body]
+    mov [mock_body_ptr], rax
+    mov dword [mock_body_len], expected_history_first_body_len
+    lea rdi, [history_prompt_first]
+    mov esi, history_prompt_first_len
+    lea rdx, [reply]
+    mov ecx, 64
+    call groq_chat_once
+    cmp eax, expected_reply_len
+    jne .fail
+    cmp qword [mock_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 4
+    lea rax, [expected_history_second_body]
+    mov [mock_body_ptr], rax
+    mov dword [mock_body_len], expected_history_second_body_len
+    lea rdi, [history_prompt_second]
+    mov esi, history_prompt_second_len
+    lea rdx, [reply]
+    mov ecx, 64
+    call groq_chat_once
+    cmp eax, expected_reply_len
+    jne .fail
+    cmp qword [mock_calls], 4
+    jne .fail
+
+    ; Non-retriable HTTP errors return failure instead of accepting error JSON.
+    mov dword [failure_stage], 5
+    xor edi, edi
+    xor esi, esi
+    call groq_select_history
     mov qword [mock_status], 400
     lea rax, [expected_custom_body]
     mov [mock_body_ptr], rax
@@ -73,11 +110,11 @@ _start:
     call groq_chat_once
     cmp eax, -1
     jne .fail
-    cmp qword [mock_calls], 3
+    cmp qword [mock_calls], 5
     jne .fail
 
     ; Header injection bytes in an API key are rejected before touching transport.
-    mov dword [failure_stage], 4
+    mov dword [failure_stage], 6
     lea rax, [bad_key]
     mov [groq_key_ptr], rax
     mov dword [groq_key_len], bad_key_len
@@ -88,7 +125,7 @@ _start:
     call groq_chat_once
     cmp eax, -1
     jne .fail
-    cmp qword [mock_calls], 3
+    cmp qword [mock_calls], 5
     jne .fail
 
     mov eax, SYS_EXIT
@@ -222,6 +259,12 @@ prompt: db 'Say ', '"', 'hi', '"', 10, 0x5c, ' now'
 prompt_len equ $ - prompt
 plain_prompt: db 'hello'
 plain_prompt_len equ $ - plain_prompt
+history_key: db 'server-333'
+history_key_len equ $ - history_key
+history_prompt_first: db 'first'
+history_prompt_first_len equ $ - history_prompt_first
+history_prompt_second: db 'second'
+history_prompt_second_len equ $ - history_prompt_second
 guild_id: db 'guild-1'
 guild_id_len equ $ - guild_id
 custom_model: db 'openai/gpt-oss-120b'
@@ -238,6 +281,10 @@ expected_plain_body: db '{"model":"llama-3.3-70b-versatile","messages":[{"role":
 expected_plain_body_len equ $ - expected_plain_body
 expected_custom_body: db '{"model":"openai/gpt-oss-120b","messages":[{"role":"system","content":"Custom ', 0x5c, '"', 'persona', 0x5c, '"', '"},{"role":"user","content":"hello"}],"max_completion_tokens":512,"temperature":0.7}'
 expected_custom_body_len equ $ - expected_custom_body
+expected_history_first_body: db '{"model":"openai/gpt-oss-120b","messages":[{"role":"system","content":"Custom ', 0x5c, '"', 'persona', 0x5c, '"', '"},{"role":"user","content":"first"}],"max_completion_tokens":512,"temperature":0.7}'
+expected_history_first_body_len equ $ - expected_history_first_body
+expected_history_second_body: db '{"model":"openai/gpt-oss-120b","messages":[{"role":"system","content":"Custom ', 0x5c, '"', 'persona', 0x5c, '"', '"},{"role":"user","content":"first"},{"role":"assistant","content":"Answer', 0x5c, 'nOK"},{"role":"user","content":"second"}],"max_completion_tokens":512,"temperature":0.7}'
+expected_history_second_body_len equ $ - expected_history_second_body
 response_json: db '{"choices":[{"message":{"content":"Answer', 0x5c, 'nOK"}}]}'
 response_json_len equ $ - response_json
 expected_reply: db 'Answer', 10, 'OK'

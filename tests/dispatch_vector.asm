@@ -8,6 +8,8 @@ global discord_send_text
 global discord_delete_message
 global groq_chat_once
 global groq_select_guild
+global groq_select_history
+global history_clear
 global afk_set
 global xp_increment
 global xp_get
@@ -39,6 +41,9 @@ _start:
     mov qword [bot_prefix_ptr], 0
     mov dword [bot_prefix_len], 0
     mov qword [send_calls], 0
+    lea rax, [groq_prompt]
+    mov [expected_groq_ptr], rax
+    mov dword [expected_groq_len], groq_prompt_len
 
     mov dword [failure_stage], 1
     lea rax, [help_response]
@@ -107,6 +112,10 @@ _start:
     cmp qword [groq_calls], 1
     jne .fail
     cmp qword [groq_select_calls], 1
+    jne .fail
+    cmp qword [groq_history_select_calls], 1
+    jne .fail
+    cmp qword [history_clear_calls], 1
     jne .fail
     cmp qword [xp_calls], 0
     jne .fail
@@ -448,17 +457,38 @@ _start:
     cmp qword [send_calls], 25
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 27
-    lea rax, [unknown_response]
+    lea rax, [ai_response]
     mov [expected_text_ptr], rax
-    mov dword [expected_text_len], unknown_response_len
+    mov dword [expected_text_len], ai_response_len
+    lea rax, [chat_prompt]
+    mov [expected_groq_ptr], rax
+    mov dword [expected_groq_len], chat_prompt_len
+    lea rdi, [chat_event]
+    mov esi, chat_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [groq_calls], 2
+    jne .fail
+    cmp qword [groq_select_calls], 2
+    jne .fail
+    cmp qword [groq_history_select_calls], 2
+    jne .fail
+    cmp qword [send_calls], 26
+    jne .fail
+
+    ; A recognized future moderation command remains explicitly inactive.
+    mov dword [failure_stage], 28
+    lea rax, [registered_notice]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], registered_notice_len
     lea rdi, [unknown_event]
     mov esi, unknown_event_len
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 26
+    cmp qword [send_calls], 27
     jne .fail
 
     mov eax, SYS_EXIT
@@ -475,13 +505,23 @@ groq_select_guild:
     xor eax, eax
     ret
 
+groq_select_history:
+    inc qword [groq_history_select_calls]
+    xor eax, eax
+    ret
+
+history_clear:
+    inc qword [history_clear_calls]
+    xor eax, eax
+    ret
+
 ; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
 groq_chat_once:
     mov r10, rdx
     mov r11d, ecx
-    cmp esi, groq_prompt_len
+    cmp esi, [expected_groq_len]
     jne .bad
-    lea r8, [groq_prompt]
+    mov r8, [expected_groq_ptr]
     mov r9d, esi
     mov rsi, r8
     mov edx, r9d
@@ -894,9 +934,11 @@ summarize_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"12345678901
 summarize_event_len equ $ - summarize_event
 groq_prompt: db 'brief this'
 groq_prompt_len equ $ - groq_prompt
+chat_prompt: db 'how are you'
+chat_prompt_len equ $ - chat_prompt
 ai_response: db 'AI summary'
 ai_response_len equ $ - ai_response
-unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^nonesuch","author":{"bot":false}}}'
+unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^kick","author":{"bot":false}}}'
 unknown_event_len equ $ - unknown_event
 addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
 addword_event_len equ $ - addword_event
@@ -930,6 +972,8 @@ clearwarn_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","cha
 clearwarn_event_len equ $ - clearwarn_event
 report_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^report <@555> flooding chat","author":{"id":"112233445566778899","bot":false}}}'
 report_event_len equ $ - report_event
+chat_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^how are you","author":{"id":"112233445566778899","bot":false}}}'
+chat_event_len equ $ - chat_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -988,8 +1032,6 @@ role_removed_response: db 'Guild auto-role removed.'
 role_removed_response_len equ $ - role_removed_response
 text_saved_response: db 'Guild message setting saved.'
 text_saved_response_len equ $ - text_saved_response
-unknown_response: db 'Unknown command. Use !help.'
-unknown_response_len equ $ - unknown_response
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
 blocked_word: db 'blocked'
@@ -1018,6 +1060,10 @@ expected_config_value_ptr: dq 0
 expected_config_value_len: dd 0
 send_calls: dq 0
 groq_calls: dq 0
+groq_history_select_calls: dq 0
+history_clear_calls: dq 0
+expected_groq_ptr: dq 0
+expected_groq_len: dd 0
 groq_select_calls: dq 0
 afk_calls: dq 0
 xp_calls: dq 0

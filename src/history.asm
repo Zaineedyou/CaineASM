@@ -4,6 +4,7 @@ DEFAULT REL
 global history_append
 global history_clear
 global history_visit
+global history_visit_recent
 
 %define HISTORY_SLOTS 16
 %define HISTORY_ENTRIES 32
@@ -198,7 +199,85 @@ history_visit:
     pop rbx
     ret
 
-; RDI=key, ESI=len. EAX=slot, or -1 when absent/invalid.
+; RDI=key, ESI=key len, RDX=callback, ECX=max newest entries. Callback has
+; the same ABI as history_visit. EAX=visited count, or -1 on invalid input/callback failure.
+history_visit_recent:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    cmp esi, HISTORY_KEY_CAP - 1
+    ja .bad
+    test rdx, rdx
+    jz .bad
+    test ecx, ecx
+    jle .bad
+    mov r12, rdx
+    mov r11d, ecx
+    call history_find
+    test eax, eax
+    js .none
+    mov r13d, eax
+    mov r14d, [history_counts + r13 * 4]
+    mov r15d, [history_heads + r13 * 4]
+    cmp r14d, r11d
+    jbe .start
+    sub r14d, r11d
+    add r15d, r14d
+    cmp r15d, HISTORY_ENTRIES
+    jb .limit_count
+    sub r15d, HISTORY_ENTRIES
+.limit_count:
+    mov r14d, r11d
+.start:
+    xor ebx, ebx
+.loop:
+    cmp ebx, r14d
+    jae .done
+    mov eax, r15d
+    add eax, ebx
+    cmp eax, HISTORY_ENTRIES
+    jb .entry_row
+    sub eax, HISTORY_ENTRIES
+.entry_row:
+    mov ecx, r13d
+    imul ecx, HISTORY_ENTRIES
+    add ecx, eax
+    mov eax, ecx
+    imul eax, HISTORY_ROLE_CAP
+    lea rdi, [history_roles + rax]
+    mov esi, [history_role_lens + rcx * 4]
+    mov eax, ecx
+    imul eax, HISTORY_CONTENT_CAP
+    lea rdx, [history_contents + rax]
+    mov ecx, [history_content_lens + rcx * 4]
+    call r12
+    test eax, eax
+    jnz .bad
+    inc ebx
+    jmp .loop
+.done:
+    mov eax, r14d
+    jmp .out
+.none:
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=key, ESI=key len. EAX=slot, or -1 when absent/invalid.
 history_find:
     test rdi, rdi
     jz .bad

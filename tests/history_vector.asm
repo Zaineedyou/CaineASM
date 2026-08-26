@@ -4,6 +4,7 @@ DEFAULT REL
 extern history_append
 extern history_clear
 extern history_visit
+extern history_visit_recent
 
 global _start
 
@@ -45,6 +46,18 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 4
+    mov dword [expected_index], 1
+    lea rdi, [key_a]
+    mov esi, key_a_len
+    lea rdx, [ordered_callback]
+    mov ecx, 1
+    call history_visit_recent
+    cmp eax, 1
+    jne .fail
+    cmp dword [expected_index], 2
+    jne .fail
+
+    mov dword [failure_stage], 5
     lea rdi, [key_a]
     mov esi, key_a_len
     call history_clear
@@ -58,7 +71,7 @@ _start:
     jnz .fail
 
     ; A second key survives the clear of key_a.
-    mov dword [failure_stage], 5
+    mov dword [failure_stage], 6
     lea rdi, [key_c]
     mov esi, key_c_len
     lea rdx, [role_user]
@@ -79,7 +92,7 @@ _start:
     jne .fail
 
     ; 33 writes retain exactly the newest bounded 32 entries for one key.
-    mov dword [failure_stage], 6
+    mov dword [failure_stage], 7
     xor ebx, ebx
 .fill_b:
     cmp ebx, 33
@@ -107,7 +120,7 @@ _start:
     jne .fail
 
     ; Previously distinct key data remains isolated after ring updates.
-    mov dword [failure_stage], 7
+    mov dword [failure_stage], 8
     mov dword [callback_count], 0
     lea rdi, [key_c]
     mov esi, key_c_len
@@ -118,7 +131,7 @@ _start:
     cmp dword [callback_count], 1
     jne .fail
 
-    mov dword [failure_stage], 8
+    mov dword [failure_stage], 9
     xor edi, edi
     mov esi, key_a_len
     lea rdx, [role_user]
@@ -129,7 +142,7 @@ _start:
     cmp eax, -1
     jne .fail
 
-    mov dword [failure_stage], 9
+    mov dword [failure_stage], 10
     lea rdi, [key_a]
     xor esi, esi
     lea rdx, [count_callback]
