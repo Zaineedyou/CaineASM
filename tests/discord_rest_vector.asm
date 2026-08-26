@@ -4,12 +4,14 @@ DEFAULT REL
 extern discord_send_text
 extern discord_delete_message
 extern discord_get_json
+extern discord_add_member_role
 extern json_escape_append
 
 global _start
 global secure_https_post_json
 global secure_https_delete
 global secure_https_get
+global secure_https_put_empty
 global discord_token_ptr
 global discord_token_len
 
@@ -153,6 +155,33 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 10
+    mov qword [put_status], 204
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [message_id]
+    mov ecx, message_id_len
+    lea r8, [role_id]
+    mov r9d, role_id_len
+    call discord_add_member_role
+    test eax, eax
+    jnz .fail
+    cmp qword [put_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 11
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [message_id]
+    mov ecx, message_id_len
+    lea r8, [invalid_channel]
+    mov r9d, invalid_channel_len
+    call discord_add_member_role
+    cmp eax, -1
+    jne .fail
+    cmp qword [put_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 12
     lea rdi, [bad_get_url]
     mov esi, bad_get_url_len
     lea rdx, [get_response]
@@ -299,6 +328,34 @@ secure_https_get:
     pop rbx
     ret
 
+; RDI=url, RSI=authorization, RDX=response, RCX=response cap, [RSP+8]=status out.
+secure_https_put_empty:
+    lea r10, [expected_role_url]
+    mov r11d, expected_role_url_len
+    call equal_cstring
+    test al, al
+    jz .put_fail
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jz .put_fail
+    cmp rcx, 2
+    jb .put_fail
+    mov byte [rdx], 0
+    mov r10, [rsp + 8]
+    test r10, r10
+    jz .put_fail
+    mov rax, [put_status]
+    mov [r10], rax
+    inc qword [put_calls]
+    xor eax, eax
+    ret
+.put_fail:
+    mov eax, -1
+    ret
+
 ; RDI=C string; R10=expected bytes; R11D=expected len. AL=1 on exact match.
 equal_cstring:
     xor eax, eax
@@ -365,6 +422,10 @@ expected_url: db 'https://discord.com/api/v10/channels/123456789012345678/messag
 expected_url_len equ $ - expected_url
 message_id: db '987654321098765432'
 message_id_len equ $ - message_id
+role_id: db '111222333444555666'
+role_id_len equ $ - role_id
+expected_role_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432/roles/111222333444555666'
+expected_role_url_len equ $ - expected_role_url
 expected_delete_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/987654321098765432'
 expected_delete_url_len equ $ - expected_delete_url
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
@@ -389,6 +450,8 @@ delete_status: dq 0
 delete_calls: dq 0
 get_calls: dq 0
 get_status: dq 0
+put_status: dq 0
+put_calls: dq 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 

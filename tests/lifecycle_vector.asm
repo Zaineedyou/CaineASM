@@ -7,6 +7,7 @@ extern lifecycle_member_remove
 global _start
 global guild_config_get
 global discord_send_text
+global discord_add_member_role
 
 %define SYS_EXIT 60
 
@@ -25,6 +26,8 @@ _start:
     jnz .fail
     cmp dword [send_calls], 1
     jne .fail
+    cmp dword [role_calls], 1
+    jne .fail
 
     mov dword [mode], 2
     lea rax, [goodbye_expected]
@@ -36,6 +39,8 @@ _start:
     test eax, eax
     jnz .fail
     cmp dword [send_calls], 2
+    jne .fail
+    cmp dword [role_calls], 1
     jne .fail
 
     ; Missing configured destination performs no send and is not an error.
@@ -62,6 +67,12 @@ guild_config_get:
     je .missing
     cmp dword [mode], 1
     jne .goodbye
+    cmp ecx, auto_role_setting_len
+    jne .welcome_channel_query
+    lea rax, [auto_role]
+    mov edx, auto_role_len
+    ret
+.welcome_channel_query:
     cmp ecx, welcome_channel_len
     jne .welcome_message
     lea rax, [welcome_channel]
@@ -84,6 +95,49 @@ guild_config_get:
 .missing:
     xor eax, eax
     xor edx, edx
+    ret
+
+; RDI=guild ESI=len RDX=user ECX=len R8=role R9D=len.
+discord_add_member_role:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdx
+    mov r12, r8
+    mov r13d, r9d
+    mov r11d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r11d, user_id_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [user_id]
+    mov edx, user_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r13d, auto_role_len
+    jne .bad
+    mov rdi, r12
+    lea rsi, [auto_role]
+    mov edx, auto_role_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc dword [role_calls]
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; RDI=channel ESI=len RDX=text ECX=len.
@@ -149,6 +203,13 @@ welcome_channel_value_len equ $ - welcome_channel
 goodbye_channel: db 'chan-g'
 goodbye_channel_value_len equ $ - goodbye_channel
 welcome_channel_len equ 15
+auto_role_setting_len equ 9
+auto_role: db '99'
+auto_role_len equ $ - auto_role
+guild_id: db 'g1'
+guild_id_len equ $ - guild_id
+user_id: db 'u1'
+user_id_len equ $ - user_id
 goodbye_channel_len equ 15
 welcome_message_len equ 11
 welcome_template: db 'Hi {user} {username} {server} {count}'
@@ -161,6 +222,7 @@ goodbye_expected_len equ $ - goodbye_expected
 section .data
 mode: dd 0
 send_calls: dd 0
+role_calls: dd 0
 expected_text_ptr: dq 0
 expected_text_len: dd 0
 failure_stage: dd 0

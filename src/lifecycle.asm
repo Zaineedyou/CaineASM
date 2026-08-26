@@ -8,6 +8,7 @@ extern json_find_key
 extern json_read_string
 extern guild_config_get
 extern discord_send_text
+extern discord_add_member_role
 
 %define ID_CAP 64
 %define NAME_CAP 128
@@ -19,6 +20,7 @@ extern discord_send_text
 section .text
 
 lifecycle_member_add:
+    mov dword [member_add_mode], 1
     lea rdx, [setting_welcome_channel]
     mov ecx, setting_welcome_channel_len
     lea r8, [setting_welcome_message]
@@ -28,6 +30,7 @@ lifecycle_member_add:
     jmp lifecycle_handle
 
 lifecycle_member_remove:
+    mov dword [member_add_mode], 0
     lea rdx, [setting_goodbye_channel]
     mov ecx, setting_goodbye_channel_len
     lea r8, [setting_goodbye_message]
@@ -86,6 +89,30 @@ lifecycle_handle:
     jle .done
     mov [user_id_len], eax
 
+    cmp dword [member_add_mode], 1
+    jne .username
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_auto_role]
+    mov ecx, setting_auto_role_len
+    call guild_config_get
+    test rax, rax
+    jz .username
+    test edx, edx
+    jle .username
+    cmp edx, ID_CAP - 1
+    ja .username
+    mov [auto_role_ptr], rax
+    mov [auto_role_len], edx
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [user_id]
+    mov ecx, [user_id_len]
+    mov r8, [auto_role_ptr]
+    mov r9d, [auto_role_len]
+    call discord_add_member_role
+    ; Role hierarchy/permission failure must not suppress lifecycle messaging.
+.username:
     mov rdi, r12
     mov rsi, r13
     lea rdx, [key_username]
@@ -391,6 +418,8 @@ setting_welcome_message: db 'welcome_msg'
 setting_welcome_message_len equ $ - setting_welcome_message
 setting_goodbye_message: db 'goodbye_msg'
 setting_goodbye_message_len equ $ - setting_goodbye_message
+setting_auto_role: db 'auto_role'
+setting_auto_role_len equ $ - setting_auto_role
 default_welcome: db 'Selamat datang {user} di **{server}**!'
 default_welcome_len equ $ - default_welcome
 default_goodbye: db 'Selamat tinggal **{username}** dari **{server}**.'
@@ -423,6 +452,9 @@ template_default_ptr: dq 0
 template_default_len: dd 0
 message_setting_ptr: dq 0
 message_setting_len: dd 0
+member_add_mode: dd 0
+auto_role_ptr: dq 0
+auto_role_len: dd 0
 output_len: dd 0
 
 section .bss

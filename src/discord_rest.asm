@@ -4,10 +4,12 @@ DEFAULT REL
 global discord_send_text
 global discord_delete_message
 global discord_get_json
+global discord_add_member_role
 
 extern secure_https_post_json
 extern secure_https_delete
 extern secure_https_get
+extern secure_https_put_empty
 extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
@@ -296,6 +298,145 @@ discord_delete_message:
     pop rbx
     ret
 
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8=role, R9D=role len.
+; EAX=0 only on Discord HTTP 2xx. All route construction and identifier checks are NASM-owned.
+discord_add_member_role:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [role_id_ptr], r8
+    mov [role_id_len], r9d
+    test r13d, r13d
+    jz .bad
+    test r15d, r15d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r15d, 64
+    ja .bad
+    cmp dword [role_id_len], 64
+    ja .bad
+    test dword [role_id_len], 0xffffffff
+    jz .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, [role_id_ptr]
+    mov esi, [role_id_len]
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov eax, guild_role_prefix_len
+    add eax, r13d
+    add eax, guild_role_middle_len
+    add eax, r15d
+    add eax, guild_role_suffix_len
+    add eax, [role_id_len]
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    lea rdi, [request_url]
+    lea rsi, [guild_role_prefix]
+    mov edx, guild_role_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    add rdi, r13
+    lea rsi, [guild_role_middle]
+    mov edx, guild_role_middle_len
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    add rdi, r13
+    add rdi, guild_role_middle_len
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    add rdi, r13
+    add rdi, guild_role_middle_len
+    add rdi, r15
+    lea rsi, [guild_role_suffix]
+    mov edx, guild_role_suffix_len
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    add rdi, r13
+    add rdi, guild_role_middle_len
+    add rdi, r15
+    add rdi, guild_role_suffix_len
+    mov rsi, [role_id_ptr]
+    mov edx, [role_id_len]
+    call copy_bytes
+    lea rdi, [request_url + guild_role_prefix_len]
+    add rdi, r13
+    add rdi, guild_role_middle_len
+    add rdi, r15
+    add rdi, guild_role_suffix_len
+    mov eax, [role_id_len]
+    add rdi, rax
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [response_body]
+    mov ecx, RESPONSE_BODY_CAP
+    call call_secure_put
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Wrapper maintains System V stack arguments for `long *status_out` (argument 5).
+call_secure_put:
+    sub rsp, 8
+    lea rax, [response_status]
+    mov [rsp], rax
+    call secure_https_put_empty
+    add rsp, 8
+    ret
+
 ; Wrapper maintains System V stack arguments for `long *status_out` (argument 7).
 ; RDI URL, RSI auth, RDX body, RCX length, R8 response, R9 capacity.
 ; RAX=transport return.
@@ -364,6 +505,12 @@ url_prefix: db 'https://discord.com/api/v10/channels/'
 url_prefix_len equ $ - url_prefix
 url_suffix: db '/messages'
 url_suffix_len equ $ - url_suffix
+guild_role_prefix: db 'https://discord.com/api/v10/guilds/'
+guild_role_prefix_len equ $ - guild_role_prefix
+guild_role_middle: db '/members/'
+guild_role_middle_len equ $ - guild_role_middle
+guild_role_suffix: db '/roles/'
+guild_role_suffix_len equ $ - guild_role_suffix
 authorization_prefix: db 'Authorization: Bot '
 authorization_prefix_len equ $ - authorization_prefix
 json_prefix: db '{"content":"'
@@ -373,6 +520,8 @@ json_suffix_len equ $ - json_suffix
 
 section .data
 response_status: dq 0
+role_id_ptr: dq 0
+role_id_len: dd 0
 
 section .bss
 request_url: resb REQUEST_URL_CAP
