@@ -38,6 +38,7 @@ extern discord_kick_member
 extern discord_ban_member
 extern discord_lock_channel
 extern discord_unlock_channel
+extern discord_set_slowmode
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -92,6 +93,7 @@ extern discord_get_json
 %define CMD_BAN 11
 %define CMD_LOCK 14
 %define CMD_UNLOCK 15
+%define CMD_SLOWMODE 16
 %define CMD_ADDWORD 17
 %define CMD_REMOVEWORD 18
 %define CMD_WORDS 19
@@ -390,6 +392,8 @@ dispatch_message_create:
     je .lock
     cmp eax, CMD_UNLOCK
     je .unlock
+    cmp eax, CMD_SLOWMODE
+    je .slowmode
     cmp eax, CMD_WARNINGS
     je .warnings
     cmp eax, CMD_CLEARWARN
@@ -1201,6 +1205,32 @@ dispatch_message_create:
     jnz .moderation_error
     lea rdi, [unlock_success_response]
     mov esi, unlock_success_response_len
+    jmp .reply
+
+.slowmode:
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    call dispatch_parse_slowmode
+    jc .slowmode_usage
+    mov rdx, rax
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    call discord_set_slowmode
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [slowmode_success_response]
+    mov esi, slowmode_success_response_len
+    jmp .reply
+.slowmode_usage:
+    lea rdi, [slowmode_usage_response]
+    mov esi, slowmode_usage_response_len
     jmp .reply
 
 .ban:
@@ -2018,6 +2048,55 @@ dispatch_bytes_equal:
     xor eax, eax
     ret
 
+; RDI=tail, ESI=len. RAX=0..21600 and CF=0; empty tail defaults to zero.
+dispatch_parse_slowmode:
+    xor eax, eax
+    xor ecx, ecx
+    test esi, esi
+    jle .ok
+.loop:
+    cmp ecx, esi
+    jae .ok
+    movzx edx, byte [rdi + rcx]
+    cmp dl, '0'
+    jb .space
+    cmp dl, '9'
+    ja .space
+    imul rax, rax, 10
+    movzx rdx, dl
+    sub rdx, '0'
+    add rax, rdx
+    cmp rax, 21600
+    ja .bad
+    inc ecx
+    jmp .loop
+.space:
+    cmp dl, ' '
+    je .tail
+    cmp dl, 9
+    je .tail
+    stc
+    ret
+.tail:
+    inc ecx
+.tail_loop:
+    cmp ecx, esi
+    jae .ok
+    mov dl, [rdi + rcx]
+    cmp dl, ' '
+    je .tail_next
+    cmp dl, 9
+    jne .bad
+.tail_next:
+    inc ecx
+    jmp .tail_loop
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+
 ; RDI=decimal tail, ESI=tail len. CF=0 only for one ASCII decimal token 5..100.
 dispatch_parse_history_limit:
     test esi, esi
@@ -2582,6 +2661,10 @@ lock_success_response: db 'Channel locked.'
 lock_success_response_len equ $ - lock_success_response
 unlock_success_response: db 'Channel unlocked.'
 unlock_success_response_len equ $ - unlock_success_response
+slowmode_usage_response: db 'Usage: slowmode <0-21600>'
+slowmode_usage_response_len equ $ - slowmode_usage_response
+slowmode_success_response: db 'Slowmode updated.'
+slowmode_success_response_len equ $ - slowmode_success_response
 ban_usage_response: db 'Usage: ban <@user>'
 ban_usage_response_len equ $ - ban_usage_response
 ban_success_response: db 'User banned.'

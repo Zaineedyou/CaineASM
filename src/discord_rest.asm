@@ -9,6 +9,7 @@ global discord_kick_member
 global discord_ban_member
 global discord_lock_channel
 global discord_unlock_channel
+global discord_set_slowmode
 global discord_add_member_role
 
 extern secure_https_post_json
@@ -16,6 +17,7 @@ extern secure_https_delete
 extern secure_https_get
 extern secure_https_put_empty
 extern secure_https_put_json
+extern secure_https_patch_json
 extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
@@ -302,6 +304,128 @@ discord_delete_message:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=channel ID, ESI=len, RDX=seconds (0..21600). EAX=0 on HTTP 2xx.
+discord_set_slowmode:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    test r13d, r13d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r14, 21600
+    ja .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov eax, url_prefix_len
+    add eax, r13d
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    mov [guild_ban_url_len], rax
+    lea rdi, [request_url]
+    lea rsi, [url_prefix]
+    mov edx, url_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + url_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url]
+    add rdi, [guild_ban_url_len]
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [slowmode_body]
+    lea rsi, [slowmode_body_prefix]
+    mov edx, slowmode_body_prefix_len
+    call copy_bytes
+    lea rdi, [slowmode_body + slowmode_body_prefix_len]
+    mov rax, r14
+    call append_uint_decimal
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    lea rdi, [slowmode_body + slowmode_body_prefix_len]
+    add rdi, rbx
+    lea rsi, [slowmode_body_suffix]
+    mov edx, slowmode_body_suffix_len
+    call copy_bytes
+    mov eax, ebx
+    add eax, slowmode_body_prefix_len + slowmode_body_suffix_len
+    mov [slowmode_body_len], eax
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [slowmode_body]
+    mov ecx, eax
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_patch_json
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RAX=value (0..21600), RDI=destination. EAX=decimal length.
+append_uint_decimal:
+    mov r9, rdi
+    xor ecx, ecx
+    cmp rax, 0
+    jne .collect
+    mov byte [rdi], '0'
+    mov eax, 1
+    ret
+.collect:
+    xor edx, edx
+    mov r8, 10
+    div r8
+    push rdx
+    inc ecx
+    test rax, rax
+    jnz .collect
+.write:
+    pop rdx
+    add dl, '0'
+    mov [rdi], dl
+    inc rdi
+    dec ecx
+    jnz .write
+    mov rax, rdi
+    sub rax, r9
     ret
 
 ; RDI=channel ID, ESI=len, RDX=guild ID, ECX=len. EAX=0 on HTTP 2xx.
@@ -849,7 +973,15 @@ discord_add_member_role:
     pop rbx
     ret
 
-; Wrapper maintains System V stack arguments for `long *status_out` (argument 5).
+; Wrapper keeps the seventh status pointer on the System V stack.
+call_secure_patch_json:
+    sub rsp, 8
+    lea rax, [response_status]
+    mov [rsp], rax
+    call secure_https_patch_json
+    add rsp, 8
+    ret
+
 ; Wrapper keeps the seventh status pointer on the System V stack.
 call_secure_put_json:
     sub rsp, 8
@@ -961,6 +1093,10 @@ ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
 lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
 lock_body_len equ $ - lock_body
+slowmode_body_prefix: db '{"rate_limit_per_user":'
+slowmode_body_prefix_len equ $ - slowmode_body_prefix
+slowmode_body_suffix: db '}'
+slowmode_body_suffix_len equ $ - slowmode_body_suffix
 
 section .data
 response_status: dq 0
@@ -968,6 +1104,7 @@ role_id_ptr: dq 0
 role_id_len: dd 0
 guild_ban_url_len: dq 0
 channel_permission_mode: db 0
+slowmode_body_len: dd 0
 
 section .bss
 request_url: resb REQUEST_URL_CAP
@@ -975,3 +1112,4 @@ get_url: resb GET_URL_CAP
 authorization: resb AUTHORIZATION_CAP
 json_body: resb JSON_BODY_CAP
 response_body: resb RESPONSE_BODY_CAP
+slowmode_body: resb 64

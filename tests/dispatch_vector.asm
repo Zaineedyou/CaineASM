@@ -33,6 +33,7 @@ global discord_kick_member
 global discord_ban_member
 global discord_lock_channel
 global discord_unlock_channel
+global discord_set_slowmode
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -769,6 +770,52 @@ _start:
     jne .fail
     mov byte [bot_permission_enabled], 0
 
+    mov dword [failure_stage], 39
+    mov byte [bot_permission_enabled], 1
+    lea rax, [slowmode_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], slowmode_success_response_len
+    lea rdi, [slowmode_event]
+    mov esi, slowmode_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [slowmode_calls], 1
+    jne .fail
+    cmp qword [send_calls], 38
+    jne .fail
+
+    mov dword [failure_stage], 40
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [slowmode_event]
+    mov esi, slowmode_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [slowmode_calls], 1
+    jne .fail
+    cmp qword [send_calls], 39
+    jne .fail
+
+    mov dword [failure_stage], 41
+    mov byte [bot_permission_enabled], 1
+    lea rax, [slowmode_usage_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], slowmode_usage_response_len
+    lea rdi, [slowmode_out_of_range_event]
+    mov esi, slowmode_out_of_range_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [slowmode_calls], 1
+    jne .fail
+    cmp qword [send_calls], 40
+    jne .fail
+    mov byte [bot_permission_enabled], 0
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -1091,6 +1138,11 @@ discord_lock_channel:
 
 discord_unlock_channel:
     inc qword [unlock_calls]
+    xor eax, eax
+    ret
+
+discord_set_slowmode:
+    inc qword [slowmode_calls]
     xor eax, eax
     ret
 
@@ -1459,6 +1511,10 @@ lock_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_
 lock_event_len equ $ - lock_event
 unlock_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^unlock","author":{"id":"user-2","bot":false}}}'
 unlock_event_len equ $ - unlock_event
+slowmode_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^slowmode 15","author":{"id":"user-2","bot":false}}}'
+slowmode_event_len equ $ - slowmode_event
+slowmode_out_of_range_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^slowmode 21601","author":{"id":"user-2","bot":false}}}'
+slowmode_out_of_range_event_len equ $ - slowmode_out_of_range_event
 addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
 addword_event_len equ $ - addword_event
 words_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^words","author":{"id":"user-2","bot":false}}}'
@@ -1549,6 +1605,10 @@ lock_success_response: db 'Channel locked.'
 lock_success_response_len equ $ - lock_success_response
 unlock_success_response: db 'Channel unlocked.'
 unlock_success_response_len equ $ - unlock_success_response
+slowmode_success_response: db 'Slowmode updated.'
+slowmode_success_response_len equ $ - slowmode_success_response
+slowmode_usage_response: db 'Usage: slowmode <0-21600>'
+slowmode_usage_response_len equ $ - slowmode_usage_response
 words_response: db 'Banned words:', 10, '- bad', 10
 words_response_len equ $ - words_response
 word_added_response: db 'Banned word added.'
@@ -1667,6 +1727,7 @@ kick_calls: dq 0
 ban_calls: dq 0
 lock_calls: dq 0
 unlock_calls: dq 0
+slowmode_calls: dq 0
 bot_permission_enabled: db 0
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles

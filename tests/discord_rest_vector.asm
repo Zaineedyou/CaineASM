@@ -9,6 +9,7 @@ extern discord_kick_member
 extern discord_ban_member
 extern discord_lock_channel
 extern discord_unlock_channel
+extern discord_set_slowmode
 extern discord_add_member_role
 extern json_escape_append
 
@@ -18,6 +19,7 @@ global secure_https_delete
 global secure_https_get
 global secure_https_put_empty
 global secure_https_put_json
+global secure_https_patch_json
 global discord_token_ptr
 global discord_token_len
 
@@ -216,6 +218,71 @@ _start:
     lea rax, [expected_unban_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_unban_url_len
+
+    mov dword [failure_stage], 759
+    lea rax, [slowmode_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], slowmode_body_len
+    mov qword [patch_status], 200
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    mov edx, 15
+    call discord_set_slowmode
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 760
+    lea rax, [slowmode_zero_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], slowmode_zero_body_len
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    xor edx, edx
+    call discord_set_slowmode
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 761
+    lea rax, [slowmode_max_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], slowmode_max_body_len
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    mov edx, 21600
+    call discord_set_slowmode
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 762
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    mov edx, 21601
+    call discord_set_slowmode
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 763
+    lea rax, [slowmode_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], slowmode_body_len
+    mov qword [patch_status], 429
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    mov edx, 15
+    call discord_set_slowmode
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 4
+    jne .fail
+    mov qword [patch_status], 200
 
     mov dword [failure_stage], 76
     mov qword [delete_status], 403
@@ -441,6 +508,76 @@ secure_https_get:
 
 ; RDI=url, RSI=authorization, RDX=JSON body, RCX=len, R8=response, R9=cap,
 ; [RSP+8]=status out.
+secure_https_patch_json:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rbx, rdx
+    mov r12, r8
+    mov r13, r9
+    mov r14, [rsp + 48]
+    mov r15d, ecx
+    lea r10, [expected_slowmode_url]
+    mov r11d, expected_slowmode_url_len
+    call equal_cstring
+    test al, al
+    jnz .patch_url_ok
+    mov dword [mock_failure_reason], 61
+    jmp .patch_fail
+.patch_url_ok:
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jnz .patch_auth_ok
+    mov dword [mock_failure_reason], 62
+    jmp .patch_fail
+.patch_auth_ok:
+    cmp r15d, [expected_patch_body_len]
+    je .patch_len_ok
+    mov dword [mock_failure_reason], 63
+    jmp .patch_fail
+.patch_len_ok:
+    mov rdi, rbx
+    mov rsi, [expected_patch_body_ptr]
+    mov edx, [expected_patch_body_len]
+    call equal_bytes
+    test al, al
+    jnz .patch_body_ok
+    mov dword [mock_failure_reason], 64
+    jmp .patch_fail
+.patch_body_ok:
+    cmp r13d, 2
+    jae .patch_cap_ok
+    mov dword [mock_failure_reason], 65
+    jmp .patch_fail
+.patch_cap_ok:
+    test r14, r14
+    jnz .patch_status_ok
+    mov dword [mock_failure_reason], 66
+    jmp .patch_fail
+.patch_status_ok:
+    mov byte [r12], 0
+    mov rax, [patch_status]
+    mov [r14], rax
+    inc qword [patch_calls]
+    xor eax, eax
+    jmp .patch_done
+.patch_fail:
+    mov eax, -1
+.patch_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=url, RSI=authorization, RDX=JSON body, RCX=len, R8=response, R9=cap,
+; [RSP+8]=status out.
 secure_https_put_json:
     mov [put_json_body_ptr], rdx
     mov r10, [expected_put_url_ptr]
@@ -609,6 +746,14 @@ expected_kick_url: db 'https://discord.com/api/v10/guilds/123456789012345678/mem
 expected_kick_url_len equ $ - expected_kick_url
 expected_lock_url: db 'https://discord.com/api/v10/channels/123456789012345678/permissions/123456789012345678'
 expected_lock_url_len equ $ - expected_lock_url
+expected_slowmode_url: db 'https://discord.com/api/v10/channels/123456789012345678'
+expected_slowmode_url_len equ $ - expected_slowmode_url
+slowmode_body: db '{"rate_limit_per_user":15}'
+slowmode_body_len equ $ - slowmode_body
+slowmode_zero_body: db '{"rate_limit_per_user":0}'
+slowmode_zero_body_len equ $ - slowmode_zero_body
+slowmode_max_body: db '{"rate_limit_per_user":21600}'
+slowmode_max_body_len equ $ - slowmode_max_body
 ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
 lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
@@ -637,6 +782,10 @@ expected_delete_len: dd 0
 delete_calls: dq 0
 get_calls: dq 0
 get_status: dq 0
+patch_status: dq 0
+patch_calls: dq 0
+expected_patch_body_ptr: dq 0
+expected_patch_body_len: dd 0
 put_status: dq 0
 put_calls: dq 0
 put_json_calls: dq 0
