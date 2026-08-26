@@ -34,6 +34,8 @@ global discord_ban_member
 global discord_lock_channel
 global discord_unlock_channel
 global discord_set_slowmode
+global discord_add_member_role
+global discord_remove_member_role
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -1212,6 +1214,10 @@ channel_auth_resolve:
     mov rax, -1
     ret
 
+guild_auth_role_position:
+    mov eax, -1
+    ret
+
 guild_auth_bot_above_roles:
     inc qword [hierarchy_calls]
     movzx eax, byte [hierarchy_allowed]
@@ -1255,6 +1261,16 @@ discord_unlock_channel:
 
 discord_set_slowmode:
     inc qword [slowmode_calls]
+    xor eax, eax
+    ret
+
+discord_add_member_role:
+    inc qword [role_add_calls]
+    xor eax, eax
+    ret
+
+discord_remove_member_role:
+    inc qword [role_remove_calls]
     xor eax, eax
     ret
 
@@ -1854,6 +1870,8 @@ ban_calls: dq 0
 lock_calls: dq 0
 unlock_calls: dq 0
 slowmode_calls: dq 0
+role_add_calls: dq 0
+role_remove_calls: dq 0
 target_get_calls: dq 0
 hierarchy_calls: dq 0
 target_mode: dd TARGET_NONE

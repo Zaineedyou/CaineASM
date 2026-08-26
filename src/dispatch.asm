@@ -33,12 +33,15 @@ extern guild_auth_roles_have
 extern channel_auth_resolve
 extern guild_auth_get_bot_roles
 extern guild_auth_bot_above_roles
+extern guild_auth_role_position
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
 extern discord_lock_channel
 extern discord_unlock_channel
 extern discord_set_slowmode
+extern discord_add_member_role
+extern discord_remove_member_role
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -79,6 +82,7 @@ extern discord_get_json
 %define PERMISSION_KICK_MEMBERS 2
 %define PERMISSION_BAN_MEMBERS 4
 %define PERMISSION_MANAGE_CHANNELS 16
+%define PERMISSION_MANAGE_ROLES 0x10000000
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -113,6 +117,8 @@ extern discord_get_json
 %define CMD_WARNINGS 33
 %define CMD_CLEARWARN 34
 %define CMD_UNBAN 35
+%define CMD_NICK 37
+%define CMD_ROLE 38
 %define CMD_REPORT 39
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
