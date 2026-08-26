@@ -28,6 +28,8 @@ extern history_append
 %define GROQ_RESPONSE_CAP 8192
 %define GROQ_RETRIES 3
 %define GROQ_HISTORY_MAX 2
+%define GROQ_HISTORY_DEFAULT 30
+%define GROQ_HISTORY_SAFE_MAX 32
 %define GROQ_HISTORY_KEY_MAX 63
 
 ; RDI=prompt bytes, ESI=prompt length, RDX=reply destination, ECX=reply capacity.
@@ -117,7 +119,7 @@ groq_chat_once:
     test esi, esi
     jle .history_done
     lea rdx, [groq_history_callback]
-    mov ecx, GROQ_HISTORY_MAX
+    mov ecx, [selected_history_limit]
     call history_visit_recent
     test eax, eax
     js .bad
@@ -393,6 +395,7 @@ groq_select_guild:
     lea rax, [default_persona]
     mov [selected_persona_ptr], rax
     mov dword [selected_persona_len], default_persona_len
+    mov dword [selected_history_limit], GROQ_HISTORY_DEFAULT
     test r12, r12
     jz .done
     test r13d, r13d
@@ -667,6 +670,7 @@ selected_persona_ptr: dq default_persona
 selected_persona_len: dd default_persona_len
 selected_history_key_ptr: dq 0
 selected_history_key_len: dd 0
+selected_history_limit: dd GROQ_HISTORY_DEFAULT
 current_prompt_ptr: dq 0
 current_prompt_len: dd 0
 last_reply_len: dd 0
