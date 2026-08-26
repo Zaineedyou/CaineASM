@@ -15,6 +15,7 @@ extern groq_chat_once
 extern groq_select_guild
 extern groq_select_history
 extern history_clear
+extern ai_rate_allow
 extern afk_set
 extern afk_clear
 extern xp_increment
@@ -380,6 +381,11 @@ dispatch_message_create:
     mov [dispatch_tail_ptr], rdi
     mov [dispatch_tail_len], esi
     call dispatch_select_history_key
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+    call ai_rate_allow
+    test al, al
+    jz .ai_rate_limited
     lea rdi, [guild_id]
     mov esi, [guild_id_len]
     call groq_select_guild
@@ -433,6 +439,10 @@ dispatch_message_create:
 .summarize_usage:
     lea rdi, [summarize_usage_response]
     mov esi, summarize_usage_response_len
+    jmp .reply
+.ai_rate_limited:
+    lea rdi, [ai_rate_limited_response]
+    mov esi, ai_rate_limited_response_len
     jmp .reply
 .ai_error:
     lea rdi, [ai_error_response]
@@ -1900,6 +1910,8 @@ unknown_response_len equ $ - unknown_response
 summarize_usage_response: db 'Usage: !summarize <text>'
 summarize_usage_response_len equ $ - summarize_usage_response
 ai_error_response: db 'AI request failed. Please try again shortly.'
+ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
+ai_rate_limited_response_len equ $ - ai_rate_limited_response
 chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
 chat_default_prompt_len equ $ - chat_default_prompt
 history_server_prefix: db 'server-'

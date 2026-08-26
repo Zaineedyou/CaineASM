@@ -10,6 +10,7 @@ global groq_chat_once
 global groq_select_guild
 global groq_select_history
 global history_clear
+global ai_rate_allow
 global afk_set
 global xp_increment
 global xp_get
@@ -513,6 +514,10 @@ groq_select_history:
 history_clear:
     inc qword [history_clear_calls]
     xor eax, eax
+    ret
+
+ai_rate_allow:
+    mov al, 1
     ret
 
 ; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
