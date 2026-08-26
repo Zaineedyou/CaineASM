@@ -10,6 +10,9 @@ global discord_ban_member
 global discord_lock_channel
 global discord_unlock_channel
 global discord_set_slowmode
+global discord_set_member_timeout
+global discord_set_member_timeout_at
+global discord_clear_member_timeout
 global discord_add_member_role
 global discord_remove_member_role
 
@@ -33,6 +36,9 @@ extern discord_token_len
 %define DISCORD_TEXT_MAX 2000
 %define AUDIT_REASON_MAX 512
 %define AUDIT_HEADER_CAP 544
+%define SYS_TIME 201
+%define TIMEOUT_MAX_MINUTES 40320
+%define TIMEOUT_BODY_CAP 64
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -311,6 +317,394 @@ discord_delete_message:
     pop rbx
     ret
 
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8D=minutes.
+; EAX=0 only for an authenticated 2xx PATCH. The duration is bounded to
+; Discord's 28-day maximum before NASM reads the current Unix time.
+discord_set_member_timeout:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov ebx, r8d
+    test ebx, ebx
+    jle .bad
+    cmp ebx, TIMEOUT_MAX_MINUTES
+    ja .bad
+    mov eax, SYS_TIME
+    xor edi, edi
+    syscall
+    test rax, rax
+    jle .bad
+    mov r8, rbx
+    imul r8, 60
+    add rax, r8
+    jc .bad
+    mov r8, rax
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r14
+    mov ecx, r15d
+    call discord_set_member_timeout_at
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8=UTC Unix expiry.
+; The deterministic primitive permits exact local vectors without a clock seam.
+discord_set_member_timeout_at:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov [timeout_expiry_epoch], r8
+    test r8, r8
+    jle .bad
+    call discord_build_member_patch_route
+    test eax, eax
+    js .bad
+    lea rdi, [timeout_body]
+    lea rsi, [timeout_body_prefix]
+    mov edx, timeout_body_prefix_len
+    call copy_bytes
+    lea rdi, [timeout_body + timeout_body_prefix_len]
+    mov rax, [timeout_expiry_epoch]
+    call format_discord_timestamp
+    cmp eax, 20
+    jne .bad
+    lea rdi, [timeout_body + timeout_body_prefix_len + 20]
+    lea rsi, [timeout_body_suffix]
+    mov edx, timeout_body_suffix_len
+    call copy_bytes
+    mov dword [timeout_body_len], timeout_body_prefix_len + 20 + timeout_body_suffix_len
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [timeout_body]
+    mov ecx, [timeout_body_len]
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_patch_json
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len. EAX=0 only on HTTP 2xx.
+discord_clear_member_timeout:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    call discord_build_member_patch_route
+    test eax, eax
+    js .bad
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [timeout_clear_body]
+    mov ecx, timeout_clear_body_len
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_patch_json
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len. EAX=0 only when route,
+; authorization, and decimal IDs are all bounded and ready for PATCH.
+discord_build_member_patch_route:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r13d, r13d
+    jz .bad
+    test r15d, r15d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r15d, 64
+    ja .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    mov eax, guild_ban_prefix_len
+    add eax, r13d
+    add eax, guild_kick_middle_len
+    add eax, r15d
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    lea rdi, [request_url]
+    lea rsi, [guild_ban_prefix]
+    mov edx, guild_ban_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    lea rsi, [guild_kick_middle]
+    mov edx, guild_kick_middle_len
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    add rdi, guild_kick_middle_len
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url + guild_ban_prefix_len]
+    add rdi, r13
+    add rdi, guild_kick_middle_len
+    add rdi, r15
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; RAX=positive Unix seconds, RDI=20-byte output. EAX=20 or -1.
+format_discord_timestamp:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rax, rax
+    jle .bad
+    xor edx, edx
+    mov rbx, 86400
+    div rbx
+    mov r12, rax
+    mov rax, rdx
+    xor edx, edx
+    mov rbx, 3600
+    div rbx
+    mov [timestamp_hour], eax
+    mov rax, rdx
+    xor edx, edx
+    mov rbx, 60
+    div rbx
+    mov [timestamp_minute], eax
+    mov [timestamp_second], edx
+    mov rax, r12
+    add rax, 719468
+    xor edx, edx
+    mov rbx, 146097
+    div rbx
+    mov r8d, eax
+    mov r9d, edx
+    mov eax, r9d
+    xor edx, edx
+    mov ecx, 1460
+    div ecx
+    mov r10d, eax
+    mov eax, r9d
+    xor edx, edx
+    mov ecx, 36524
+    div ecx
+    mov r11d, eax
+    mov eax, r9d
+    xor edx, edx
+    mov ecx, 146096
+    div ecx
+    mov r12d, eax
+    mov eax, r9d
+    sub eax, r10d
+    add eax, r11d
+    sub eax, r12d
+    xor edx, edx
+    mov ecx, 365
+    div ecx
+    mov r13d, eax
+    imul r8d, r8d, 400
+    add r13d, r8d
+    mov eax, r13d
+    sub eax, r8d
+    imul eax, eax, 365
+    mov r10d, eax
+    mov eax, r13d
+    sub eax, r8d
+    xor edx, edx
+    mov ecx, 4
+    div ecx
+    add r10d, eax
+    mov eax, r13d
+    sub eax, r8d
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    sub r10d, eax
+    mov eax, r9d
+    sub eax, r10d
+    mov r9d, eax
+    imul eax, r9d, 5
+    add eax, 2
+    xor edx, edx
+    mov ecx, 153
+    div ecx
+    mov r10d, eax
+    imul eax, r10d, 153
+    add eax, 2
+    xor edx, edx
+    mov ecx, 5
+    div ecx
+    mov r11d, r9d
+    sub r11d, eax
+    inc r11d
+    mov r12d, r10d
+    cmp r12d, 10
+    jb .month_early
+    sub r12d, 9
+    jmp .month_ready
+.month_early:
+    add r12d, 3
+.month_ready:
+    cmp r12d, 2
+    ja .year_ready
+    inc r13d
+.year_ready:
+    cmp r13d, 9999
+    ja .bad
+    mov eax, r13d
+    call write_four_decimal
+    mov byte [rdi], '-'
+    inc rdi
+    mov eax, r12d
+    call write_two_decimal
+    mov byte [rdi], '-'
+    inc rdi
+    mov eax, r11d
+    call write_two_decimal
+    mov byte [rdi], 'T'
+    inc rdi
+    mov eax, [timestamp_hour]
+    call write_two_decimal
+    mov byte [rdi], ':'
+    inc rdi
+    mov eax, [timestamp_minute]
+    call write_two_decimal
+    mov byte [rdi], ':'
+    inc rdi
+    mov eax, [timestamp_second]
+    call write_two_decimal
+    mov byte [rdi], 'Z'
+    mov eax, 20
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; EAX=0..99, RDI=dest. RDI advances by 2.
+write_two_decimal:
+    xor edx, edx
+    mov ecx, 10
+    div ecx
+    add al, '0'
+    mov [rdi], al
+    add dl, '0'
+    mov [rdi + 1], dl
+    add rdi, 2
+    ret
+; EAX=0..9999, RDI=dest. RDI advances by 4.
+write_four_decimal:
+    xor edx, edx
+    mov ecx, 1000
+    div ecx
+    add al, '0'
+    mov [rdi], al
+    mov eax, edx
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    add al, '0'
+    mov [rdi + 1], al
+    mov eax, edx
+    xor edx, edx
+    mov ecx, 10
+    div ecx
+    add al, '0'
+    mov [rdi + 2], al
+    add dl, '0'
+    mov [rdi + 3], dl
+    add rdi, 4
+    ret
 ; RDI=channel ID, ESI=len, RDX=seconds (0..21600). EAX=0 on HTTP 2xx.
 discord_set_slowmode:
     push rbx
@@ -1242,6 +1636,12 @@ slowmode_body_prefix: db '{"rate_limit_per_user":'
 slowmode_body_prefix_len equ $ - slowmode_body_prefix
 slowmode_body_suffix: db '}'
 slowmode_body_suffix_len equ $ - slowmode_body_suffix
+timeout_body_prefix: db '{"communication_disabled_until":"'
+timeout_body_prefix_len equ $ - timeout_body_prefix
+timeout_body_suffix: db '"}'
+timeout_body_suffix_len equ $ - timeout_body_suffix
+timeout_clear_body: db '{"communication_disabled_until":null}'
+timeout_clear_body_len equ $ - timeout_clear_body
 
 section .data
 response_status: dq 0
@@ -1251,6 +1651,11 @@ role_remove_mode: db 0
 guild_ban_url_len: dq 0
 channel_permission_mode: db 0
 slowmode_body_len: dd 0
+timeout_body_len: dd 0
+timestamp_hour: dd 0
+timestamp_minute: dd 0
+timestamp_second: dd 0
+timeout_expiry_epoch: dq 0
 audit_reason_ptr: dq 0
 audit_reason_len: dd 0
 section .bss
@@ -1261,4 +1666,5 @@ authorization: resb AUTHORIZATION_CAP
 json_body: resb JSON_BODY_CAP
 response_body: resb RESPONSE_BODY_CAP
 slowmode_body: resb 64
+timeout_body: resb TIMEOUT_BODY_CAP
 audit_reason_header: resb AUDIT_HEADER_CAP

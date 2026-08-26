@@ -10,6 +10,9 @@ extern discord_ban_member
 extern discord_lock_channel
 extern discord_unlock_channel
 extern discord_set_slowmode
+extern discord_set_member_timeout
+extern discord_set_member_timeout_at
+extern discord_clear_member_timeout
 extern discord_add_member_role
 extern discord_remove_member_role
 extern json_escape_append
@@ -45,6 +48,9 @@ _start:
     lea rax, [expected_delete_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_delete_url_len
+    lea rax, [expected_slowmode_url]
+    mov [expected_patch_url_ptr], rax
+    mov dword [expected_patch_url_len], expected_slowmode_url_len
 
     mov dword [failure_stage], 1
     ; Direct helper coverage: all JSON-sensitive bytes are escaped boundedly.
@@ -341,6 +347,88 @@ _start:
     cmp qword [patch_calls], 4
     jne .fail
     mov qword [patch_status], 200
+
+    ; Timeout PATCH uses the exact guild-member route and a UTC ISO-8601 body;
+    ; untimeout sends JSON null. Both retain the same bounded PATCH boundary.
+    mov dword [failure_stage], 764
+    lea rax, [expected_member_url]
+    mov [expected_patch_url_ptr], rax
+    mov dword [expected_patch_url_len], expected_member_url_len
+    lea rax, [timeout_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], timeout_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    mov r8, 1787747696
+    call discord_set_member_timeout_at
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 5
+    jne .fail
+
+    mov dword [failure_stage], 7641
+    lea rax, [timeout_leap_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], timeout_leap_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    mov r8, 1709251199
+    call discord_set_member_timeout_at
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 6
+    jne .fail
+
+    mov dword [failure_stage], 765
+    lea rax, [timeout_clear_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], timeout_clear_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    call discord_clear_member_timeout
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 7
+    jne .fail
+
+    mov dword [failure_stage], 766
+    mov qword [patch_status], 429
+    lea rax, [timeout_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], timeout_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    mov r8, 1787747696
+    call discord_set_member_timeout_at
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 8
+    jne .fail
+    mov qword [patch_status], 200
+
+    mov dword [failure_stage], 767
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    xor r8d, r8d
+    call discord_set_member_timeout_at
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 8
+    jne .fail
+
+    lea rax, [expected_slowmode_url]
+    mov [expected_patch_url_ptr], rax
+    mov dword [expected_patch_url_len], expected_slowmode_url_len
 
     mov dword [failure_stage], 76
     mov qword [delete_status], 403
@@ -651,8 +739,8 @@ secure_https_patch_json:
     mov r13, r9
     mov r14, [rsp + 48]
     mov r15d, ecx
-    lea r10, [expected_slowmode_url]
-    mov r11d, expected_slowmode_url_len
+    mov r10, [expected_patch_url_ptr]
+    mov r11d, [expected_patch_url_len]
     call equal_cstring
     test al, al
     jnz .patch_url_ok
@@ -938,12 +1026,20 @@ expected_lock_url: db 'https://discord.com/api/v10/channels/123456789012345678/p
 expected_lock_url_len equ $ - expected_lock_url
 expected_slowmode_url: db 'https://discord.com/api/v10/channels/123456789012345678'
 expected_slowmode_url_len equ $ - expected_slowmode_url
+expected_member_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
+expected_member_url_len equ $ - expected_member_url
 slowmode_body: db '{"rate_limit_per_user":15}'
 slowmode_body_len equ $ - slowmode_body
 slowmode_zero_body: db '{"rate_limit_per_user":0}'
 slowmode_zero_body_len equ $ - slowmode_zero_body
 slowmode_max_body: db '{"rate_limit_per_user":21600}'
 slowmode_max_body_len equ $ - slowmode_max_body
+timeout_body: db '{"communication_disabled_until":"2026-08-26T12:34:56Z"}'
+timeout_body_len equ $ - timeout_body
+timeout_leap_body: db '{"communication_disabled_until":"2024-02-29T23:59:59Z"}'
+timeout_leap_body_len equ $ - timeout_leap_body
+timeout_clear_body: db '{"communication_disabled_until":null}'
+timeout_clear_body_len equ $ - timeout_clear_body
 ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
 lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
@@ -985,6 +1081,8 @@ get_calls: dq 0
 get_status: dq 0
 patch_status: dq 0
 patch_calls: dq 0
+expected_patch_url_ptr: dq 0
+expected_patch_url_len: dd 0
 expected_patch_body_ptr: dq 0
 expected_patch_body_len: dd 0
 put_status: dq 0

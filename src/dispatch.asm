@@ -41,6 +41,8 @@ extern discord_ban_member
 extern discord_lock_channel
 extern discord_unlock_channel
 extern discord_set_slowmode
+extern discord_set_member_timeout
+extern discord_clear_member_timeout
 extern discord_add_member_role
 extern discord_remove_member_role
 extern guild_word_add
@@ -84,6 +86,7 @@ extern discord_get_json
 %define PERMISSION_BAN_MEMBERS 4
 %define PERMISSION_MANAGE_CHANNELS 16
 %define PERMISSION_MANAGE_ROLES 0x10000000
+%define PERMISSION_MODERATE_MEMBERS 0x10000000000
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -96,6 +99,7 @@ extern discord_get_json
 %define CMD_WARN 9
 %define CMD_KICK 10
 %define CMD_BAN 11
+%define CMD_TIMEOUT 12
 %define CMD_LOCK 14
 %define CMD_UNLOCK 15
 %define CMD_SLOWMODE 16
@@ -118,6 +122,7 @@ extern discord_get_json
 %define CMD_WARNINGS 33
 %define CMD_CLEARWARN 34
 %define CMD_UNBAN 35
+%define CMD_UNTIMEOUT 36
 %define CMD_NICK 37
 %define CMD_ROLE 38
 %define CMD_REPORT 39
@@ -401,6 +406,10 @@ dispatch_message_create:
     je .unlock
     cmp eax, CMD_SLOWMODE
     je .slowmode
+    cmp eax, CMD_TIMEOUT
+    je .timeout
+    cmp eax, CMD_UNTIMEOUT
+    je .untimeout
     cmp eax, CMD_ROLE
     je .role
     cmp eax, CMD_WARNINGS
@@ -1249,6 +1258,76 @@ dispatch_message_create:
     mov esi, slowmode_usage_response_len
     jmp .reply
 
+.timeout:
+    mov r8, PERMISSION_MODERATE_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MODERATE_MEMBERS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_parse_timeout_command
+    test eax, eax
+    jle .timeout_usage
+    mov [timeout_minutes], eax
+    lea rdi, [timeout_target]
+    mov esi, [timeout_target_len]
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [timeout_target]
+    mov ecx, [timeout_target_len]
+    mov r8d, [timeout_minutes]
+    call discord_set_member_timeout
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [timeout_success_response]
+    mov esi, timeout_success_response_len
+    jmp .reply
+.timeout_usage:
+    lea rdi, [timeout_usage_response]
+    mov esi, timeout_usage_response_len
+    jmp .reply
+.untimeout:
+    mov r8, PERMISSION_MODERATE_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MODERATE_MEMBERS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_parse_untimeout_command
+    test eax, eax
+    jle .untimeout_usage
+    lea rdi, [timeout_target]
+    mov esi, [timeout_target_len]
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [timeout_target]
+    mov ecx, [timeout_target_len]
+    call discord_clear_member_timeout
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [untimeout_success_response]
+    mov esi, untimeout_success_response_len
+    jmp .reply
+.untimeout_usage:
+    lea rdi, [untimeout_usage_response]
+    mov esi, untimeout_usage_response_len
+    jmp .reply
 .role:
     mov r8, PERMISSION_MANAGE_ROLES
     call dispatch_has_permission
@@ -2202,6 +2281,201 @@ dispatch_parse_role_command:
     pop r12
     pop rbx
     ret
+; RDI=tail bytes, ESI=len. EAX=minutes (1..40320), or -1. Accepts only
+; `<@user> <minutes> [reason]` in that order; reason is intentionally ignored
+; by timeout REST because it has no source API payload field.
+dispatch_parse_timeout_command:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13d, esi
+    mov dword [timeout_target_len], 0
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    xor ebx, ebx
+    cmp byte [r12 + rbx], '<'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '@'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '!'
+    jne .digits_start
+    inc ebx
+.digits_start:
+    xor r14d, r14d
+.digits:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, '>'
+    je .target_done
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp r14d, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov [timeout_target + r14], al
+    inc r14d
+    inc ebx
+    jmp .digits
+.target_done:
+    test r14d, r14d
+    jz .bad
+    mov [timeout_target_len], r14d
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+.skip_ws:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .advance_ws
+    cmp al, 9
+    je .advance_ws
+    cmp al, 10
+    je .advance_ws
+    cmp al, 13
+    je .advance_ws
+    jmp .minutes_start
+.advance_ws:
+    inc ebx
+    jmp .skip_ws
+.minutes_start:
+    xor eax, eax
+    xor r14d, r14d
+.minutes:
+    cmp ebx, r13d
+    jae .minutes_done
+    movzx edx, byte [r12 + rbx]
+    cmp dl, '0'
+    jb .minutes_tail
+    cmp dl, '9'
+    ja .minutes_tail
+    imul eax, eax, 10
+    sub edx, '0'
+    add eax, edx
+    cmp eax, 40320
+    ja .bad
+    inc r14d
+    inc ebx
+    jmp .minutes
+.minutes_tail:
+    test r14d, r14d
+    jz .bad
+    test eax, eax
+    jz .bad
+    cmp dl, ' '
+    je .ok
+    cmp dl, 9
+    je .ok
+    cmp dl, 10
+    je .ok
+    cmp dl, 13
+    jne .bad
+.ok:
+    jmp .out
+.minutes_done:
+    test r14d, r14d
+    jz .bad
+    test eax, eax
+    jz .bad
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    jmp .out
+; RDI=tail bytes, ESI=len. EAX=target len or -1. Accepts only a single
+; user mention followed by optional ASCII whitespace; extra tokens fail closed.
+dispatch_parse_untimeout_command:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13d, esi
+    mov dword [timeout_target_len], 0
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    xor ebx, ebx
+    cmp byte [r12 + rbx], '<'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '@'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '!'
+    jne .digits_start
+    inc ebx
+.digits_start:
+    xor r14d, r14d
+.digits:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, '>'
+    je .target_done
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp r14d, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov [timeout_target + r14], al
+    inc r14d
+    inc ebx
+    jmp .digits
+.target_done:
+    test r14d, r14d
+    jz .bad
+    mov [timeout_target_len], r14d
+    inc ebx
+.trailing:
+    cmp ebx, r13d
+    jae .ok
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .advance
+    cmp al, 9
+    je .advance
+    cmp al, 10
+    je .advance
+    cmp al, 13
+    jne .bad
+.advance:
+    inc ebx
+    jmp .trailing
+.ok:
+    mov eax, [timeout_target_len]
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=tail bytes, ESI=len, DL='#' for <#id> or '&' for <@&id>.
 ; EAX=extracted decimal ID len, or -1. The ID is copied into config_value.
 dispatch_extract_mention_id:
@@ -2984,6 +3258,14 @@ ban_usage_response: db 'Usage: ban <@user>'
 ban_usage_response_len equ $ - ban_usage_response
 ban_success_response: db 'User banned.'
 ban_success_response_len equ $ - ban_success_response
+timeout_usage_response: db 'Usage: timeout <@user> <1-40320 minutes> [reason]'
+timeout_usage_response_len equ $ - timeout_usage_response
+timeout_success_response: db 'User timed out.'
+timeout_success_response_len equ $ - timeout_success_response
+untimeout_usage_response: db 'Usage: untimeout <@user>'
+untimeout_usage_response_len equ $ - untimeout_usage_response
+untimeout_success_response: db 'User timeout removed.'
+untimeout_success_response_len equ $ - untimeout_success_response
 role_command_usage_response: db 'Usage: role add|remove <@user> <@&role>'
 role_command_usage_response_len equ $ - role_command_usage_response
 role_add_success_response: db 'Role added.'
@@ -3068,6 +3350,9 @@ warning_target_len: resd 1
 moderation_target_len: resd 1
 moderation_reason_ptr: resq 1
 moderation_reason_len: resd 1
+timeout_target_len: resd 1
+timeout_minutes: resd 1
+timeout_target: resb AUTHOR_ID_CAP
 role_target_len: resd 1
 role_requested_len: resd 1
 role_action: resd 1

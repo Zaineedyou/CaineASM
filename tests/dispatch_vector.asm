@@ -36,6 +36,8 @@ global discord_ban_member
 global discord_lock_channel
 global discord_unlock_channel
 global discord_set_slowmode
+global discord_set_member_timeout
+global discord_clear_member_timeout
 global discord_add_member_role
 global discord_remove_member_role
 global guild_word_add
@@ -1138,6 +1140,168 @@ _start:
     cmp qword [send_calls], 55
     jne .fail
 
+    ; Timeout and untimeout require caller+bot MODERATE_MEMBERS, a complete
+    ; target GET, strict bot hierarchy, and ordered bounded command tokens.
+    mov dword [failure_stage], 57
+    mov byte [bot_permission_enabled], 1
+    mov dword [target_mode], TARGET_VALID
+    mov byte [hierarchy_allowed], 1
+    lea rax, [timeout_success_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], timeout_success_response_test_len
+    lea rdi, [timeout_event]
+    mov esi, timeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 13
+    jne .fail
+    cmp qword [hierarchy_calls], 9
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 0
+    jne .fail
+    cmp qword [send_calls], 56
+    jne .fail
+
+    mov dword [failure_stage], 58
+    lea rax, [untimeout_success_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], untimeout_success_response_test_len
+    lea rdi, [untimeout_event]
+    mov esi, untimeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 14
+    jne .fail
+    cmp qword [hierarchy_calls], 10
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 57
+    jne .fail
+
+    mov dword [failure_stage], 59
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [timeout_event]
+    mov esi, timeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 14
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 58
+    jne .fail
+
+    mov dword [failure_stage], 60
+    mov byte [bot_permission_enabled], 1
+    mov byte [hierarchy_allowed], 0
+    lea rax, [hierarchy_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], hierarchy_denied_response_len
+    lea rdi, [untimeout_event]
+    mov esi, untimeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 15
+    jne .fail
+    cmp qword [hierarchy_calls], 11
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 59
+    jne .fail
+
+    mov dword [failure_stage], 61
+    mov byte [hierarchy_allowed], 1
+    lea rax, [timeout_usage_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], timeout_usage_response_test_len
+    lea rdi, [timeout_invalid_event]
+    mov esi, timeout_invalid_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 15
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 60
+    jne .fail
+
+    mov dword [failure_stage], 62
+    lea rax, [untimeout_usage_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], untimeout_usage_response_test_len
+    lea rdi, [untimeout_invalid_event]
+    mov esi, untimeout_invalid_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 15
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 61
+    jne .fail
+
+    mov dword [failure_stage], 63
+    mov dword [target_mode], TARGET_MALFORMED
+    lea rax, [hierarchy_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], hierarchy_denied_response_len
+    lea rdi, [timeout_event]
+    mov esi, timeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 16
+    jne .fail
+    cmp qword [hierarchy_calls], 11
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 62
+    jne .fail
+
+    mov dword [failure_stage], 64
+    mov dword [target_mode], TARGET_ERROR
+    lea rdi, [untimeout_event]
+    mov esi, untimeout_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 17
+    jne .fail
+    cmp qword [hierarchy_calls], 11
+    jne .fail
+    cmp qword [timeout_calls], 1
+    jne .fail
+    cmp qword [timeout_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 63
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -1451,7 +1615,7 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
-    mov rax, 0x10000016
+    mov rax, 0x10010000016
     ret
 .deny:
     mov rax, -1
@@ -1574,6 +1738,68 @@ discord_unlock_channel:
 discord_set_slowmode:
     inc qword [slowmode_calls]
     xor eax, eax
+    ret
+discord_set_member_timeout:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, timeout_target_len_expected
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [timeout_target_expected]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r8d, 15
+    jne .bad
+    inc qword [timeout_calls]
+    xor eax, eax
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop r12
+    pop rbx
+    ret
+discord_clear_member_timeout:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, timeout_target_len_expected
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [timeout_target_expected]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [timeout_clear_calls]
+    xor eax, eax
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop r12
+    pop rbx
     ret
 
 discord_add_member_role:
@@ -2017,6 +2243,24 @@ kick_audit_reason: db 'policy reason'
 kick_audit_reason_len equ $ - kick_audit_reason
 ban_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^ban <@555>","author":{"id":"user-2","bot":false}}}'
 ban_target_event_len equ $ - ban_target_event
+timeout_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^timeout <@555> 15 reason","author":{"id":"user-2","bot":false}}}'
+timeout_event_len equ $ - timeout_event
+untimeout_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^untimeout <@555>","author":{"id":"user-2","bot":false}}}'
+untimeout_event_len equ $ - untimeout_event
+timeout_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^timeout <@555> 40321","author":{"id":"user-2","bot":false}}}'
+timeout_invalid_event_len equ $ - timeout_invalid_event
+untimeout_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^untimeout <@555> trailing","author":{"id":"user-2","bot":false}}}'
+untimeout_invalid_event_len equ $ - untimeout_invalid_event
+timeout_target_expected: db '555'
+timeout_target_len_expected equ $ - timeout_target_expected
+timeout_usage_response_test: db 'Usage: timeout <@user> <1-40320 minutes> [reason]'
+timeout_usage_response_test_len equ $ - timeout_usage_response_test
+timeout_success_response_test: db 'User timed out.'
+timeout_success_response_test_len equ $ - timeout_success_response_test
+untimeout_usage_response_test: db 'Usage: untimeout <@user>'
+untimeout_usage_response_test_len equ $ - untimeout_usage_response_test
+untimeout_success_response_test: db 'User timeout removed.'
+untimeout_success_response_test_len equ $ - untimeout_success_response_test
 role_add_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role add <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'
 role_add_event_len equ $ - role_add_event
 role_remove_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role remove <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'
@@ -2260,6 +2504,8 @@ unlock_calls: dq 0
 slowmode_calls: dq 0
 role_add_calls: dq 0
 role_remove_calls: dq 0
+timeout_calls: dq 0
+timeout_clear_calls: dq 0
 role_position_calls: dq 0
 bot_highest_calls: dq 0
 target_get_calls: dq 0
