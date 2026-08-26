@@ -1521,12 +1521,14 @@ dispatch_fetch_target_member_roles:
     mov edx, [guild_id_len]
     call copy_bytes
     lea rdi, [target_member_url + target_member_url_prefix_len]
-    add rdi, [guild_id_len]
+    mov eax, [guild_id_len]
+    add rdi, rax
     lea rsi, [target_member_url_middle]
     mov edx, target_member_url_middle_len
     call copy_bytes
     lea rdi, [target_member_url + target_member_url_prefix_len]
-    add rdi, [guild_id_len]
+    mov eax, [guild_id_len]
+    add rdi, rax
     add rdi, target_member_url_middle_len
     mov rsi, r12
     mov edx, r13d
@@ -1553,7 +1555,8 @@ dispatch_fetch_target_member_roles:
     mov r14, rax
     mov rdi, r14
     lea rsi, [target_member_response]
-    add rsi, [target_member_response_len]
+    mov eax, [target_member_response_len]
+    add rsi, rax
     call json_array_end
     test rax, rax
     jz .bad
@@ -1680,7 +1683,8 @@ dispatch_is_reply_to_bot:
     mov r14, rax
     mov rdi, r14
     lea rsi, [reply_reference_response]
-    add rsi, [reply_reference_response_len]
+    mov eax, [reply_reference_response_len]
+    add rsi, rax
     call json_object_end
     test rax, rax
     jz .no

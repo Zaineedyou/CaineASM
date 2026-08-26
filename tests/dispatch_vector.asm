@@ -60,6 +60,10 @@ global discord_get_json
 %define REPLY_BOT 1
 %define REPLY_OTHER 2
 %define REPLY_ERROR 3
+%define TARGET_NONE 0
+%define TARGET_VALID 1
+%define TARGET_MALFORMED 2
+%define TARGET_ERROR 3
 
 section .text
 _start:
@@ -816,6 +820,82 @@ _start:
     jne .fail
     mov byte [bot_permission_enabled], 0
 
+    ; Kick/ban must make exactly one bounded target GET, require a complete
+    ; roles array, then reach destructive REST only when strict hierarchy wins.
+    mov dword [failure_stage], 42
+    mov byte [bot_permission_enabled], 1
+    mov dword [target_mode], TARGET_VALID
+    mov byte [hierarchy_allowed], 1
+    lea rax, [kick_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], kick_success_response_len
+    lea rdi, [kick_target_event]
+    mov esi, kick_target_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 1
+    jne .fail
+    cmp qword [hierarchy_calls], 1
+    jne .fail
+    cmp qword [kick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 41
+    jne .fail
+
+    mov dword [failure_stage], 43
+    mov byte [hierarchy_allowed], 0
+    lea rax, [hierarchy_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], hierarchy_denied_response_len
+    lea rdi, [ban_target_event]
+    mov esi, ban_target_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 2
+    jne .fail
+    cmp qword [hierarchy_calls], 2
+    jne .fail
+    cmp qword [ban_calls], 0
+    jne .fail
+    cmp qword [send_calls], 42
+    jne .fail
+
+    mov dword [failure_stage], 44
+    mov dword [target_mode], TARGET_MALFORMED
+    lea rdi, [kick_target_event]
+    mov esi, kick_target_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 3
+    jne .fail
+    cmp qword [hierarchy_calls], 2
+    jne .fail
+    cmp qword [kick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 43
+    jne .fail
+
+    mov dword [failure_stage], 45
+    mov dword [target_mode], TARGET_ERROR
+    lea rdi, [ban_target_event]
+    mov esi, ban_target_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 4
+    jne .fail
+    cmp qword [hierarchy_calls], 2
+    jne .fail
+    cmp qword [ban_calls], 0
+    jne .fail
+    cmp qword [send_calls], 44
+    jne .fail
+    mov dword [target_mode], TARGET_NONE
+    mov byte [bot_permission_enabled], 0
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -1002,6 +1082,8 @@ discord_get_json:
     push r13
     mov r12, rdx
     mov r13d, ecx
+    cmp dword [target_mode], TARGET_NONE
+    jne .target
     cmp dword [reply_mode], REPLY_NONE
     je .bad
     lea r8, [reply_expected_url]
@@ -1027,6 +1109,35 @@ discord_get_json:
     lea rsi, [reply_other_response]
     mov edx, reply_other_response_len
 .copy:
+    mov rdi, r12
+    call copy_bytes
+    mov byte [r12 + rdx], 0
+    mov eax, edx
+    jmp .out
+.target:
+    lea r8, [target_expected_url]
+    mov r9d, target_expected_url_len
+    cmp esi, r9d
+    jne .bad
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [target_get_calls]
+    cmp dword [target_mode], TARGET_ERROR
+    je .bad
+    cmp r13d, target_valid_response_len + 1
+    jb .bad
+    cmp dword [target_mode], TARGET_MALFORMED
+    je .target_malformed
+    lea rsi, [target_valid_response]
+    mov edx, target_valid_response_len
+    jmp .target_copy
+.target_malformed:
+    lea rsi, [target_malformed_response]
+    mov edx, target_malformed_response_len
+.target_copy:
     mov rdi, r12
     call copy_bytes
     mov byte [r12 + rdx], 0
@@ -1095,14 +1206,15 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
-    mov eax, 20
+    mov eax, 22
     ret
 .deny:
     mov rax, -1
     ret
 
 guild_auth_bot_above_roles:
-    xor eax, eax
+    inc qword [hierarchy_calls]
+    movzx eax, byte [hierarchy_allowed]
     ret
 
 guild_auth_get_bot_roles:
@@ -1515,6 +1627,16 @@ slowmode_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","chan
 slowmode_event_len equ $ - slowmode_event
 slowmode_out_of_range_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^slowmode 21601","author":{"id":"user-2","bot":false}}}'
 slowmode_out_of_range_event_len equ $ - slowmode_out_of_range_event
+kick_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^kick <@555>","author":{"id":"user-2","bot":false}}}'
+kick_target_event_len equ $ - kick_target_event
+ban_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^ban <@555>","author":{"id":"user-2","bot":false}}}'
+ban_target_event_len equ $ - ban_target_event
+target_expected_url: db 'https://discord.com/api/v10/guilds/guild-1/members/555'
+target_expected_url_len equ $ - target_expected_url
+target_valid_response: db '{"roles":["1001"]}'
+target_valid_response_len equ $ - target_valid_response
+target_malformed_response: db '{"roles":"broken"}'
+target_malformed_response_len equ $ - target_malformed_response
 addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
 addword_event_len equ $ - addword_event
 words_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^words","author":{"id":"user-2","bot":false}}}'
@@ -1609,6 +1731,10 @@ slowmode_success_response: db 'Slowmode updated.'
 slowmode_success_response_len equ $ - slowmode_success_response
 slowmode_usage_response: db 'Usage: slowmode <0-21600>'
 slowmode_usage_response_len equ $ - slowmode_usage_response
+kick_success_response: db 'User kicked.'
+kick_success_response_len equ $ - kick_success_response
+hierarchy_denied_response: db 'Bot cannot moderate this target due to role hierarchy or incomplete member state.'
+hierarchy_denied_response_len equ $ - hierarchy_denied_response
 words_response: db 'Banned words:', 10, '- bad', 10
 words_response_len equ $ - words_response
 word_added_response: db 'Banned word added.'
@@ -1728,6 +1854,10 @@ ban_calls: dq 0
 lock_calls: dq 0
 unlock_calls: dq 0
 slowmode_calls: dq 0
+target_get_calls: dq 0
+hierarchy_calls: dq 0
+target_mode: dd TARGET_NONE
+hierarchy_allowed: db 0
 bot_permission_enabled: db 0
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles
