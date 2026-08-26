@@ -25,6 +25,9 @@ global guild_channel_enable
 global guild_channel_is_disabled
 global guild_config_set
 global guild_config_delete
+global warnings_add
+global warnings_get
+global warnings_clear
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -374,8 +377,47 @@ _start:
     jne .fail
     mov dword [automod_enabled], 0
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 22
+    lea rax, [warning_reply]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], warning_reply_len
+    lea rdi, [warn_event]
+    mov esi, warn_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [warnings_add_calls], 1
+    jne .fail
+    cmp qword [send_calls], 20
+    jne .fail
+
+    mov dword [failure_stage], 23
+    lea rdi, [warnings_event]
+    mov esi, warnings_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [warnings_get_calls], 1
+    jne .fail
+    cmp qword [send_calls], 21
+    jne .fail
+
+    mov dword [failure_stage], 24
+    lea rax, [clearwarn_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], clearwarn_response_len
+    lea rdi, [clearwarn_event]
+    mov esi, clearwarn_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [warnings_clear_calls], 1
+    jne .fail
+    cmp qword [send_calls], 22
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 25
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -384,7 +426,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 20
+    cmp qword [send_calls], 23
     jne .fail
 
     mov eax, SYS_EXIT
@@ -550,6 +592,19 @@ guild_config_set:
 
 guild_config_delete:
     inc qword [config_delete_calls]
+    xor eax, eax
+    ret
+
+warnings_add:
+    inc qword [warnings_add_calls]
+    mov eax, 3
+    ret
+warnings_get:
+    inc qword [warnings_get_calls]
+    mov eax, 3
+    ret
+warnings_clear:
+    inc qword [warnings_clear_calls]
     xor eax, eax
     ret
 
@@ -807,6 +862,12 @@ welcomemsg_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","ch
 welcomemsg_event_len equ $ - welcomemsg_event
 automod_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"998877665544332211","guild_id":"guild-1","channel_id":"123456789012345678","content":"blocked content","author":{"id":"user-2","bot":false}}}'
 automod_event_len equ $ - automod_event
+warn_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^warn <@555> reason","author":{"id":"user-2","bot":false}}}'
+warn_event_len equ $ - warn_event
+warnings_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^warnings <@555>","author":{"id":"user-2","bot":false}}}'
+warnings_event_len equ $ - warnings_event
+clearwarn_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^clearwarn <@555>","author":{"id":"user-2","bot":false}}}'
+clearwarn_event_len equ $ - clearwarn_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -873,6 +934,10 @@ blocked_word: db 'blocked'
 blocked_word_len equ $ - blocked_word
 automod_message_id: db '998877665544332211'
 automod_message_id_len equ $ - automod_message_id
+warning_reply: db 'Warnings: 3.'
+warning_reply_len equ $ - warning_reply
+clearwarn_response: db 'Warnings cleared.'
+clearwarn_response_len equ $ - clearwarn_response
 
 section .data
 bot_prefix_ptr: dq 0
@@ -896,4 +961,7 @@ config_set_calls: dq 0
 config_delete_calls: dq 0
 delete_calls: dq 0
 automod_enabled: dd 0
+warnings_add_calls: dq 0
+warnings_get_calls: dq 0
+warnings_clear_calls: dq 0
 failure_stage: dd 0

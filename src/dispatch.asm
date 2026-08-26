@@ -30,6 +30,9 @@ extern guild_channel_enable
 extern guild_channel_is_disabled
 extern guild_config_set
 extern guild_config_delete
+extern warnings_add
+extern warnings_get
+extern warnings_clear
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -41,6 +44,7 @@ extern bot_prefix_len
 %define AI_REPLY_CAP 1901
 %define STATE_VIEW_REPLY_CAP 2000
 %define PERMISSION_ADMINISTRATOR 8
+%define PERMISSION_KICK_MEMBERS 2
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -50,6 +54,7 @@ extern bot_prefix_len
 %define CMD_LEADERBOARD 6
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
+%define CMD_WARN 9
 %define CMD_ADDWORD 17
 %define CMD_REMOVEWORD 18
 %define CMD_WORDS 19
@@ -66,6 +71,8 @@ extern bot_prefix_len
 %define CMD_SETLOG 30
 %define CMD_SETWELCOMEMSG 31
 %define CMD_SETGOODBYEMSG 32
+%define CMD_WARNINGS 33
+%define CMD_CLEARWARN 34
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -313,6 +320,12 @@ dispatch_message_create:
     je .reset
     cmp eax, CMD_SUMMARIZE
     je .summarize
+    cmp eax, CMD_WARN
+    je .warn
+    cmp eax, CMD_WARNINGS
+    je .warnings
+    cmp eax, CMD_CLEARWARN
+    je .clearwarn
     cmp eax, CMD_ADDWORD
     je .addword
     cmp eax, CMD_REMOVEWORD
@@ -811,6 +824,117 @@ dispatch_message_create:
     lea rdi, [text_usage_response]
     mov esi, text_usage_response_len
     jmp .reply
+.warn:
+    mov r8, PERMISSION_KICK_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .warn_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .warn_usage
+    mov [warning_target_len], eax
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [config_value]
+    mov ecx, eax
+    call warnings_add
+    test eax, eax
+    js .policy_error
+    lea rdi, [warning_reply + warning_reply_prefix_len]
+    call format_uint32
+    mov ebx, eax
+    lea rdi, [warning_reply]
+    lea rsi, [warning_reply_prefix]
+    mov edx, warning_reply_prefix_len
+    call copy_bytes
+    lea rdi, [warning_reply + warning_reply_prefix_len]
+    add rdi, rbx
+    lea rsi, [warning_reply_suffix]
+    mov edx, warning_reply_suffix_len
+    call copy_bytes
+    mov esi, ebx
+    add esi, warning_reply_prefix_len + warning_reply_suffix_len
+    lea rdi, [warning_reply]
+    jmp .reply
+.warn_usage:
+    lea rdi, [warn_usage_response]
+    mov esi, warn_usage_response_len
+    jmp .reply
+.warnings:
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .warnings_self
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .warnings_self
+    mov [warning_target_len], eax
+    jmp .warnings_query
+.warnings_self:
+    cmp dword [author_id_len], 0
+    je .warn_usage
+    lea rdi, [config_value]
+    lea rsi, [author_id]
+    mov edx, [author_id_len]
+    call copy_bytes
+    mov eax, [author_id_len]
+    mov [warning_target_len], eax
+.warnings_query:
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [config_value]
+    mov ecx, [warning_target_len]
+    call warnings_get
+    test eax, eax
+    js .policy_error
+    lea rdi, [warning_reply + warning_reply_prefix_len]
+    call format_uint32
+    mov ebx, eax
+    lea rdi, [warning_reply]
+    lea rsi, [warning_reply_prefix]
+    mov edx, warning_reply_prefix_len
+    call copy_bytes
+    lea rdi, [warning_reply + warning_reply_prefix_len]
+    add rdi, rbx
+    lea rsi, [warning_reply_suffix]
+    mov edx, warning_reply_suffix_len
+    call copy_bytes
+    mov esi, ebx
+    add esi, warning_reply_prefix_len + warning_reply_suffix_len
+    lea rdi, [warning_reply]
+    jmp .reply
+.clearwarn:
+    mov r8, PERMISSION_KICK_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .warn_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .warn_usage
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [config_value]
+    mov ecx, eax
+    call warnings_clear
+    test eax, eax
+    js .policy_error
+    lea rdi, [clearwarn_response]
+    mov esi, clearwarn_response_len
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
@@ -964,13 +1088,26 @@ dispatch_extract_mention_id:
     cmp byte [rbx + rcx], '<'
     jne .advance
     cmp dl, '#'
-    jne .role_open
+    jne .not_channel
     lea eax, [rcx + 2]
     cmp eax, r12d
     jae .bad
     cmp byte [rbx + rcx + 1], '#'
     jne .advance
     jmp .digits
+.not_channel:
+    cmp dl, '@'
+    jne .role_open
+    lea eax, [rcx + 2]
+    cmp eax, r12d
+    jae .bad
+    cmp byte [rbx + rcx + 1], '@'
+    jne .advance
+    cmp byte [rbx + rax], '!'
+    jne .digits
+    inc eax
+    jmp .digits
+    ; role mention form is <@&id>.
 .role_open:
     lea eax, [rcx + 3]
     cmp eax, r12d
@@ -1333,6 +1470,14 @@ key_content: db 'content'
 key_content_len equ $ - key_content
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
+warn_usage_response: db 'Usage: warn/clearwarn @user.'
+warn_usage_response_len equ $ - warn_usage_response
+clearwarn_response: db 'Warnings cleared.'
+clearwarn_response_len equ $ - clearwarn_response
+warning_reply_prefix: db 'Warnings: '
+warning_reply_prefix_len equ $ - warning_reply_prefix
+warning_reply_suffix: db '.'
+warning_reply_suffix_len equ $ - warning_reply_suffix
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -1477,6 +1622,8 @@ config_success_len: resd 1
 config_value_len: resd 1
 config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
+warning_target_len: resd 1
+warning_reply: resb 64
 rank_response: resb 32
 rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP

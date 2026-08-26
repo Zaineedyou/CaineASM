@@ -41,6 +41,13 @@ global command_is_admin_only
 %define CMD_SETLOG 30
 %define CMD_SETWELCOMEMSG 31
 %define CMD_SETGOODBYEMSG 32
+%define CMD_WARNINGS 33
+%define CMD_CLEARWARN 34
+%define CMD_UNBAN 35
+%define CMD_UNTIMEOUT 36
+%define CMD_NICK 37
+%define CMD_ROLE 38
+%define CMD_REPORT 39
 
 
 section .text
@@ -118,6 +125,16 @@ command_is_admin_only:
     je .yes
     cmp edi, CMD_SETGOODBYEMSG
     je .yes
+    cmp edi, CMD_CLEARWARN
+    je .yes
+    cmp edi, CMD_UNBAN
+    je .yes
+    cmp edi, CMD_UNTIMEOUT
+    je .yes
+    cmp edi, CMD_NICK
+    je .yes
+    cmp edi, CMD_ROLE
+    je .yes
     xor eax, eax
     ret
 .yes:
@@ -175,6 +192,13 @@ s_setlevelchannel: db 'setlevelchannel'
 s_setlog: db 'setlog'
 s_setwelcomemsg: db 'setwelcomemsg'
 s_setgoodbyemsg: db 'setgoodbyemsg'
+s_warnings: db 'warnings'
+s_clearwarn: db 'clearwarn'
+s_unban: db 'unban'
+s_untimeout: db 'untimeout'
+s_nick: db 'nick'
+s_role: db 'role'
+s_report: db 'report'
 
 align 8
 command_table:
@@ -242,5 +266,19 @@ command_table:
     dq s_setwelcomemsg
     dd CMD_SETGOODBYEMSG, 13
     dq s_setgoodbyemsg
+    dd CMD_WARNINGS, 8
+    dq s_warnings
+    dd CMD_CLEARWARN, 9
+    dq s_clearwarn
+    dd CMD_UNBAN, 5
+    dq s_unban
+    dd CMD_UNTIMEOUT, 9
+    dq s_untimeout
+    dd CMD_NICK, 4
+    dq s_nick
+    dd CMD_ROLE, 4
+    dq s_role
+    dd CMD_REPORT, 6
+    dq s_report
     dd 0, 0
     dq 0

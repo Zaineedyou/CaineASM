@@ -11,6 +11,8 @@ global _start
 %define CMD_SETPERSONA 22
 %define CMD_SETLOG 30
 %define CMD_SETGOODBYEMSG 32
+%define CMD_WARNINGS 33
+%define CMD_REPORT 39
 
 section .text
 _start:
@@ -52,6 +54,22 @@ _start:
     cmp eax, CMD_SETGOODBYEMSG
     jne .fail
 
+    lea rdi, [warnings]
+    mov esi, warnings_len
+    call command_classify
+    cmp eax, CMD_WARNINGS
+    jne .fail
+
+    lea rdi, [report]
+    mov esi, report_len
+    call command_classify
+    cmp eax, CMD_REPORT
+    jne .fail
+    mov edi, eax
+    call command_is_admin_only
+    test al, al
+    jnz .fail
+
     lea rdi, [setbridge]
     mov esi, setbridge_len
     call command_classify
@@ -83,6 +101,10 @@ setlog: db 'setlog'
 setlog_len equ $ - setlog
 goodbyemsg: db 'setgoodbyemsg'
 goodbyemsg_len equ $ - goodbyemsg
+warnings: db 'warnings'
+warnings_len equ $ - warnings
+report: db 'report'
+report_len equ $ - report
 setbridge: db 'setbridge'
 setbridge_len equ $ - setbridge
 bridgestatus: db 'bridgestatus'
