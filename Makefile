@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/history.o $(BUILD_DIR)/ai_rate_limit.o $(BUILD_DIR)/base64.o $(BUILD_DIR)/attachment_fetch.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/history.o $(BUILD_DIR)/ai_rate_limit.o $(BUILD_DIR)/base64.o $(BUILD_DIR)/attachment_fetch.o $(BUILD_DIR)/attachment_parser.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -27,8 +27,9 @@ HISTORY_TEST := $(BUILD_DIR)/history-vector
 AI_RATE_LIMIT_TEST := $(BUILD_DIR)/ai-rate-limit-vector
 BASE64_TEST := $(BUILD_DIR)/base64-vector
 ATTACHMENT_FETCH_TEST := $(BUILD_DIR)/attachment-fetch-vector
+ATTACHMENT_PARSER_TEST := $(BUILD_DIR)/attachment-parser-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch test-attachment-parser test
 
 all: $(BINARY)
 
@@ -84,6 +85,9 @@ $(BUILD_DIR)/base64.o: src/base64.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/attachment_fetch.o: src/attachment_fetch.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/attachment_parser.o: src/attachment_parser.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/store.o: src/store.asm | $(BUILD_DIR)
@@ -287,7 +291,16 @@ $(ATTACHMENT_FETCH_TEST): $(BUILD_DIR)/attachment-fetch-vector.o $(BUILD_DIR)/at
 test-attachment-fetch: $(ATTACHMENT_FETCH_TEST)
 	./$(ATTACHMENT_FETCH_TEST)
 
-test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch
+$(BUILD_DIR)/attachment-parser-vector.o: tests/attachment_parser_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(ATTACHMENT_PARSER_TEST): $(BUILD_DIR)/attachment-parser-vector.o $(BUILD_DIR)/attachment_parser.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-attachment-parser: $(ATTACHMENT_PARSER_TEST)
+	./$(ATTACHMENT_PARSER_TEST)
+
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch test-attachment-parser
 
 inspect: $(BINARY)
 	file $(BINARY)
