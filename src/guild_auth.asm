@@ -4,6 +4,10 @@ DEFAULT REL
 global guild_auth_reset
 global guild_auth_cache_owner
 global guild_auth_cache_role
+global guild_auth_cache_role_position
+global guild_auth_role_position
+global guild_auth_member_highest_position
+global guild_auth_bot_above_member
 global guild_auth_is_owner
 global guild_auth_is_manager
 global guild_auth_roles_have
@@ -22,7 +26,7 @@ extern bot_owner_len
 %define OWNER_SLOT_COUNT 64
 %define OWNER_SLOT_SIZE 144
 %define ROLE_SLOT_COUNT 256
-%define ROLE_SLOT_SIZE 152
+%define ROLE_SLOT_SIZE 160
 %define PERMISSION_ADMINISTRATOR 8
 
 ; Ephemeral authorization cache. It is populated from trusted Gateway guild
@@ -93,6 +97,10 @@ guild_auth_cache_owner:
 ; RDI=guild, ESI=guild len, RDX=role, ECX=role len, R8=permission bitset.
 ; EAX=0 success, -1 invalid/full.
 guild_auth_cache_role:
+    xor r9d, r9d
+    jmp guild_auth_cache_role_position
+
+guild_auth_cache_role_position:
     push r12
     push r13
     push r14
@@ -102,6 +110,7 @@ guild_auth_cache_role:
     mov r14, rdx
     mov r15d, ecx
     mov [cached_permission], r8
+    mov [cached_position], r9d
     test r13d, r13d
     jz .bad
     test r15d, r15d
@@ -119,11 +128,13 @@ guild_auth_cache_role:
     mov [r11 + 8], r15d
     mov r8, [cached_permission]
     mov [r11 + 16], r8
-    lea rdi, [r11 + 24]
+    mov eax, [cached_position]
+    mov [r11 + 24], eax
+    lea rdi, [r11 + 32]
     mov rsi, r12
     mov edx, r13d
     call copy_bytes
-    lea rdi, [r11 + 24 + ID_CAP]
+    lea rdi, [r11 + 32 + ID_CAP]
     mov rsi, r14
     mov edx, r15d
     call copy_bytes
@@ -466,12 +477,29 @@ guild_auth_cache_guild_create:
     jc .bad
     mov [snapshot_permission], rax
 
+    mov rdi, rbx
+    mov rsi, [snapshot_object_end]
+    sub rsi, rdi
+    lea rdx, [key_position]
+    mov ecx, key_position_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    mov rsi, [snapshot_object_end]
+    call json_read_uint
+    jc .bad
+    cmp rax, 2147483647
+    ja .bad
+    mov [snapshot_position], eax
+
     lea rdi, [snapshot_guild]
     mov esi, [snapshot_guild_len]
     lea rdx, [snapshot_role]
     mov ecx, [snapshot_role_len]
     mov r8, [snapshot_permission]
-    call guild_auth_cache_role
+    mov r9d, [snapshot_position]
+    call guild_auth_cache_role_position
     test eax, eax
     jnz .bad
     mov rbx, [snapshot_object_end]
@@ -550,7 +578,7 @@ auth_clear_guild:
     jne .role_next
     cmp r13d, [r9 + 4]
     jne .role_next
-    lea rdi, [r9 + 24]
+    lea rdi, [r9 + 32]
     mov rsi, r12
     mov edx, r13d
     call equal_bytes
@@ -727,7 +755,7 @@ find_role_slot:
     jne .empty
     cmp r13d, [r9 + 4]
     jne .next
-    lea rdi, [r9 + 24]
+    lea rdi, [r9 + 32]
     mov rsi, r12
     mov edx, r13d
     call equal_bytes
@@ -735,7 +763,7 @@ find_role_slot:
     jz .next
     cmp r15d, [r9 + 8]
     jne .next
-    lea rdi, [r9 + 24 + ID_CAP]
+    lea rdi, [r9 + 32 + ID_CAP]
     mov rsi, r14
     mov edx, r15d
     call equal_bytes
@@ -776,7 +804,7 @@ get_role_permissions:
     jne .next
     cmp r13d, [r9 + 4]
     jne .next
-    lea rdi, [r9 + 24]
+    lea rdi, [r9 + 32]
     mov rsi, r12
     mov edx, r13d
     call equal_bytes
@@ -784,7 +812,7 @@ get_role_permissions:
     jz .next
     cmp r15d, [r9 + 8]
     jne .next
-    lea rdi, [r9 + 24 + ID_CAP]
+    lea rdi, [r9 + 32 + ID_CAP]
     mov rsi, r14
     mov edx, r15d
     call equal_bytes
@@ -802,6 +830,185 @@ get_role_permissions:
     pop r14
     pop r13
     pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=role, ECX=role len. EAX=position or -1
+; when the exact bounded role record is absent.
+guild_auth_role_position:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    xor r10d, r10d
+.loop:
+    cmp r10d, ROLE_SLOT_COUNT
+    jae .missing
+    imul rax, r10, ROLE_SLOT_SIZE
+    lea r9, [role_slots + rax]
+    cmp byte [r9], 1
+    jne .next
+    cmp r13d, [r9 + 4]
+    jne .next
+    lea rdi, [r9 + 32]
+    mov rsi, r12
+    mov edx, r13d
+    call equal_bytes
+    test al, al
+    jz .next
+    cmp r15d, [r9 + 8]
+    jne .next
+    lea rdi, [r9 + 32 + ID_CAP]
+    mov rsi, r14
+    mov edx, r15d
+    call equal_bytes
+    test al, al
+    jz .next
+    mov eax, [r9 + 24]
+    jmp .out
+.next:
+    inc r10d
+    jmp .loop
+.missing:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=opening roles JSON array, ECX=array len.
+; EAX=highest cached role position including @everyone, or -1 for malformed or
+; incomplete role state. This is a hierarchy primitive, not a permission grant.
+guild_auth_member_highest_position:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    test r14, r14
+    jz .bad
+    test r15d, r15d
+    jle .bad
+    lea rax, [r14 + r15]
+    mov [hierarchy_array_end], rax
+    mov rdi, r14
+    mov rsi, rax
+    call json_array_end
+    test rax, rax
+    jz .bad
+    cmp rax, [hierarchy_array_end]
+    jne .bad
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r12                    ; @everyone role ID equals guild ID
+    mov ecx, r13d
+    call guild_auth_role_position
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    lea r15, [r14 + 1]
+.skip_ws:
+    mov r11, [hierarchy_array_end]
+    dec r11
+    cmp r15, r11
+    jae .done
+    mov al, [r15]
+    cmp al, ' '
+    je .advance
+    cmp al, 9
+    je .advance
+    cmp al, 10
+    je .advance
+    cmp al, 13
+    je .advance
+    cmp al, ','
+    je .advance
+    cmp al, '"'
+    jne .bad
+    mov rdi, r15
+    mov rsi, [hierarchy_array_end]
+    lea rdx, [role_id]
+    mov ecx, ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov r15, rdx
+    mov r10d, eax
+    mov rdi, r12
+    mov esi, r13d
+    lea rdx, [role_id]
+    mov ecx, r10d
+    call guild_auth_role_position
+    test eax, eax
+    js .bad
+    cmp eax, ebx
+    jle .skip_ws
+    mov ebx, eax
+    jmp .skip_ws
+.advance:
+    inc r15
+    jmp .skip_ws
+.done:
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild, ESI=guild len, RDX=bot roles JSON, ECX=len, R8=target roles JSON,
+; R9D=len. AL=1 only if bot highest position is strictly above target highest.
+guild_auth_bot_above_member:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, r8
+    mov r13d, r9d
+    mov r14, rdi
+    mov r15d, esi
+    call guild_auth_member_highest_position
+    test eax, eax
+    js .no
+    mov ebx, eax
+    mov rdi, r14
+    mov esi, r15d
+    mov rdx, r12
+    mov ecx, r13d
+    call guild_auth_member_highest_position
+    test eax, eax
+    js .no
+    cmp ebx, eax
+    jle .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; RDI and RSI buffers, EDX=count. AL=1 when equal.
@@ -846,9 +1053,12 @@ key_roles: db 'roles'
 key_roles_len equ $ - key_roles
 key_permissions: db 'permissions'
 key_permissions_len equ $ - key_permissions
+key_position: db 'position'
+key_position_len equ $ - key_position
 
 section .data
 cached_permission: dq 0
+cached_position: dd 0
 accumulated_permissions: dq 0
 snapshot_data_ptr: dq 0
 snapshot_data_end: dq 0
@@ -859,6 +1069,8 @@ snapshot_guild_len: dd 0
 snapshot_owner_len: dd 0
 snapshot_role_len: dd 0
 snapshot_permission: dq 0
+snapshot_position: dd 0
+hierarchy_array_end: dq 0
 
 section .bss
 owner_slots: resb OWNER_SLOT_COUNT * OWNER_SLOT_SIZE

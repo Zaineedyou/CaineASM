@@ -8,6 +8,10 @@ global bot_owner_len
 extern guild_auth_reset
 extern guild_auth_cache_owner
 extern guild_auth_cache_role
+extern guild_auth_cache_role_position
+extern guild_auth_role_position
+extern guild_auth_member_highest_position
+extern guild_auth_bot_above_member
 extern guild_auth_is_owner
 extern guild_auth_is_manager
 extern guild_auth_roles_have
@@ -102,13 +106,34 @@ _start:
     cmp rax, PERM_KICK | PERM_BAN
     jne .fail
 
+    ; Role positions are cached independently from permission bitsets and are
+    ; available for later bot/target hierarchy checks.
+    mov dword [failure_stage], 8
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [role_mod]
+    mov ecx, role_mod_len
+    mov r8, PERM_BAN
+    mov r9d, 10
+    call guild_auth_cache_role_position
+    test eax, eax
+    jnz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [role_mod]
+    mov ecx, role_mod_len
+    call guild_auth_role_position
+    cmp eax, 10
+    jne .fail
+
     ; Administrator role bypasses individual requested permission bits.
     lea rdi, [guild_one]
     mov esi, guild_one_len
     lea rdx, [role_admin]
     mov ecx, role_admin_len
     mov r8, PERM_ADMIN
-    call guild_auth_cache_role
+    mov r9d, 20
+    call guild_auth_cache_role_position
     test eax, eax
     jnz .fail
     lea rdi, [guild_one]
@@ -119,6 +144,42 @@ _start:
     call guild_auth_roles_have
     test al, al
     jz .fail
+
+    ; Hierarchy uses strict highest-position comparison and never treats an
+    ; unknown/malformed member role list as manageable.
+    mov dword [failure_stage], 9
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_admin_roles]
+    mov ecx, member_admin_roles_len
+    call guild_auth_member_highest_position
+    cmp eax, 20
+    jne .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    call guild_auth_member_highest_position
+    cmp eax, 10
+    jne .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_admin_roles]
+    mov ecx, member_admin_roles_len
+    lea r8, [member_roles]
+    mov r9d, member_roles_len
+    call guild_auth_bot_above_member
+    test al, al
+    jz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    lea r8, [member_admin_roles]
+    mov r9d, member_admin_roles_len
+    call guild_auth_bot_above_member
+    test al, al
+    jnz .fail
 
     ; Malformed roles JSON and unknown guild role entries fail closed.
     lea rdi, [guild_one]
@@ -186,6 +247,13 @@ _start:
     call guild_auth_roles_have
     test al, al
     jz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [role_mod]
+    mov ecx, role_mod_len
+    call guild_auth_role_position
+    cmp eax, 10
+    jne .fail
 
     ; A truncated guild payload fails safely.
     lea rdi, [truncated_guild_create]
@@ -221,7 +289,7 @@ member_admin_roles: db '["2002"]'
 member_admin_roles_len equ $ - member_admin_roles
 malformed_roles: db '["2001"'
 malformed_roles_len equ $ - malformed_roles
-guild_create_event: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[{"id":"1001","permissions":"2"},{"id":"2001","permissions":"4"}]}}'
+guild_create_event: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[{"id":"1001","permissions":"2","position":0},{"id":"2001","permissions":"4","position":10}]}}'
 guild_create_event_len equ $ - guild_create_event
 truncated_guild_create: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001"'
 truncated_guild_create_len equ $ - truncated_guild_create
