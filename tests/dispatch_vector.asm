@@ -1541,8 +1541,19 @@ discord_unban_member:
     ret
 
 discord_kick_member:
+    cmp r9d, kick_audit_reason_len
+    jne .bad
+    mov rdi, r8
+    lea rsi, [kick_audit_reason]
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
     inc qword [kick_calls]
     xor eax, eax
+    ret
+.bad:
+    mov eax, -1
     ret
 
 discord_ban_member:
@@ -2000,8 +2011,10 @@ slowmode_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","chan
 slowmode_event_len equ $ - slowmode_event
 slowmode_out_of_range_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^slowmode 21601","author":{"id":"user-2","bot":false}}}'
 slowmode_out_of_range_event_len equ $ - slowmode_out_of_range_event
-kick_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^kick <@555>","author":{"id":"user-2","bot":false}}}'
+kick_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^kick <@555> policy reason","author":{"id":"user-2","bot":false}}}'
 kick_target_event_len equ $ - kick_target_event
+kick_audit_reason: db 'policy reason'
+kick_audit_reason_len equ $ - kick_audit_reason
 ban_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^ban <@555>","author":{"id":"user-2","bot":false}}}'
 ban_target_event_len equ $ - ban_target_event
 role_add_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role add <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'

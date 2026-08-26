@@ -15,9 +15,11 @@ global discord_remove_member_role
 
 extern secure_https_post_json
 extern secure_https_delete
+extern secure_https_delete_with_header
 extern secure_https_get
 extern secure_https_put_empty
 extern secure_https_put_json
+extern secure_https_put_json_with_header
 extern secure_https_patch_json
 extern json_escape_append
 extern discord_token_ptr
@@ -29,6 +31,8 @@ extern discord_token_len
 %define RESPONSE_BODY_CAP 4096
 %define GET_URL_CAP 512
 %define DISCORD_TEXT_MAX 2000
+%define AUDIT_REASON_MAX 512
+%define AUDIT_HEADER_CAP 544
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -545,8 +549,9 @@ discord_channel_permission_route:
     pop rbx
     ret
 
-; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len. EAX=0 only for
-; Discord HTTP 2xx. Dispatch verifies target member hierarchy before this route.
+; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len, R8=reason, R9D=len.
+; EAX=0 only for Discord HTTP 2xx. The bounded UTF-8 reason is RFC3986-encoded
+; into the audit header entirely in NASM; dispatch verifies target hierarchy.
 discord_kick_member:
     push rbx
     push r12
@@ -557,6 +562,8 @@ discord_kick_member:
     mov r13d, esi
     mov r14, rdx
     mov r15d, ecx
+    mov [audit_reason_ptr], r8
+    mov [audit_reason_len], r9d
     test r13d, r13d
     jz .bad
     test r15d, r15d
@@ -619,12 +626,18 @@ discord_kick_member:
     mov edx, [discord_token_len]
     call copy_bytes
     mov byte [rdi + rdx], 0
+    mov rdi, [audit_reason_ptr]
+    mov esi, [audit_reason_len]
+    call build_audit_reason_header
+    test eax, eax
+    js .bad
     lea rdi, [request_url]
     lea rsi, [authorization]
-    lea rdx, [response_body]
-    mov ecx, RESPONSE_BODY_CAP
-    lea r8, [response_status]
-    call secure_https_delete
+    lea rdx, [audit_reason_header]
+    lea rcx, [response_body]
+    mov r8d, RESPONSE_BODY_CAP
+    lea r9, [response_status]
+    call secure_https_delete_with_header
     test rax, rax
     js .bad
     mov rax, [response_status]
@@ -644,8 +657,9 @@ discord_kick_member:
     pop rbx
     ret
 
-; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len. EAX=0 only for
-; Discord HTTP 2xx. Dispatch validates target hierarchy before this route.
+; RDI=guild ID, ESI=guild len, RDX=user ID, ECX=user len, R8=reason, R9D=len.
+; EAX=0 only for Discord HTTP 2xx. Dispatch validates target hierarchy before
+; this route; NASM creates the bounded audit header before transport.
 discord_ban_member:
     push rbx
     push r12
@@ -656,6 +670,8 @@ discord_ban_member:
     mov r13d, esi
     mov r14, rdx
     mov r15d, ecx
+    mov [audit_reason_ptr], r8
+    mov [audit_reason_len], r9d
     test r13d, r13d
     jz .bad
     test r15d, r15d
@@ -718,13 +734,18 @@ discord_ban_member:
     mov edx, [discord_token_len]
     call copy_bytes
     mov byte [rdi + rdx], 0
+    mov rdi, [audit_reason_ptr]
+    mov esi, [audit_reason_len]
+    call build_audit_reason_header
+    test eax, eax
+    js .bad
     lea rdi, [request_url]
     lea rsi, [authorization]
-    lea rdx, [ban_body]
-    mov ecx, ban_body_len
-    lea r8, [response_body]
-    mov r9d, RESPONSE_BODY_CAP
-    call call_secure_put_json
+    lea rdx, [audit_reason_header]
+    lea rcx, [ban_body]
+    mov r8d, ban_body_len
+    lea r9, [response_body]
+    call call_secure_put_json_with_header
     test rax, rax
     js .bad
     mov rax, [response_status]
@@ -1008,6 +1029,17 @@ call_secure_put_json:
     call secure_https_put_json
     add rsp, 8
     ret
+; RDI URL, RSI auth, RDX extra header, RCX JSON body, R8 body length,
+; R9 response. The seventh capacity and eighth status pointer are placed on
+; the System V stack with 16-byte call alignment.
+call_secure_put_json_with_header:
+    sub rsp, 24
+    mov qword [rsp], RESPONSE_BODY_CAP
+    lea rax, [response_status]
+    mov [rsp + 8], rax
+    call secure_https_put_json_with_header
+    add rsp, 24
+    ret
 
 call_secure_put:
     sub rsp, 8
@@ -1028,6 +1060,96 @@ call_secure_post:
     add rsp, 8
     ret
 
+; RDI=reason bytes, ESI=len. EAX=0 and audit_reason_header populated only
+; for a bounded RFC3986 header. Empty input preserves the Go source default.
+build_audit_reason_header:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13d, esi
+    test r12, r12
+    jz .default
+    test r13d, r13d
+    jz .default
+    cmp r13d, AUDIT_REASON_MAX
+    ja .bad
+.begin:
+    lea rdi, [audit_reason_header]
+    lea rsi, [audit_reason_prefix]
+    mov edx, audit_reason_prefix_len
+    call copy_bytes
+    mov ebx, audit_reason_prefix_len
+    xor r14d, r14d
+.encode:
+    cmp r14d, r13d
+    jae .done
+    movzx eax, byte [r12 + r14]
+    cmp al, 'A'
+    jb .lower
+    cmp al, 'Z'
+    jbe .plain
+.lower:
+    cmp al, 'a'
+    jb .digit
+    cmp al, 'z'
+    jbe .plain
+.digit:
+    cmp al, '0'
+    jb .symbol
+    cmp al, '9'
+    jbe .plain
+.symbol:
+    cmp al, '-'
+    je .plain
+    cmp al, '.'
+    je .plain
+    cmp al, '_'
+    je .plain
+    cmp al, '~'
+    je .plain
+    lea ecx, [ebx + 3]
+    sub ecx, audit_reason_prefix_len
+    cmp ecx, AUDIT_REASON_MAX
+    ja .bad
+    mov byte [audit_reason_header + rbx], '%'
+    mov ecx, eax
+    shr ecx, 4
+    and eax, 15
+    lea rdx, [hex_upper]
+    mov cl, [rdx + rcx]
+    mov [audit_reason_header + rbx + 1], cl
+    mov al, [rdx + rax]
+    mov [audit_reason_header + rbx + 2], al
+    add ebx, 3
+    inc r14d
+    jmp .encode
+.plain:
+    lea ecx, [ebx + 1]
+    sub ecx, audit_reason_prefix_len
+    cmp ecx, AUDIT_REASON_MAX
+    ja .bad
+    mov [audit_reason_header + rbx], al
+    inc ebx
+    inc r14d
+    jmp .encode
+.done:
+    mov byte [audit_reason_header + rbx], 0
+    xor eax, eax
+    jmp .out
+.default:
+    lea r12, [audit_reason_default]
+    mov r13d, audit_reason_default_len
+    jmp .begin
+.bad:
+    mov eax, -1
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI and RSI buffers, EDX=count. AL=1 when equal.
 equal_bytes:
     xor ecx, ecx
@@ -1103,6 +1225,11 @@ guild_role_suffix: db '/roles/'
 guild_role_suffix_len equ $ - guild_role_suffix
 authorization_prefix: db 'Authorization: Bot '
 authorization_prefix_len equ $ - authorization_prefix
+audit_reason_prefix: db 'X-Audit-Log-Reason: '
+audit_reason_prefix_len equ $ - audit_reason_prefix
+audit_reason_default: db 'Tidak ada alasan'
+audit_reason_default_len equ $ - audit_reason_default
+hex_upper: db '0123456789ABCDEF'
 json_prefix: db '{"content":"'
 json_prefix_len equ $ - json_prefix
 json_suffix: db '"}'
@@ -1124,11 +1251,14 @@ role_remove_mode: db 0
 guild_ban_url_len: dq 0
 channel_permission_mode: db 0
 slowmode_body_len: dd 0
-
+audit_reason_ptr: dq 0
+audit_reason_len: dd 0
 section .bss
+
 request_url: resb REQUEST_URL_CAP
 get_url: resb GET_URL_CAP
 authorization: resb AUTHORIZATION_CAP
 json_body: resb JSON_BODY_CAP
 response_body: resb RESPONSE_BODY_CAP
 slowmode_body: resb 64
+audit_reason_header: resb AUDIT_HEADER_CAP

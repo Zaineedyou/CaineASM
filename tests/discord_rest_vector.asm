@@ -17,9 +17,11 @@ extern json_escape_append
 global _start
 global secure_https_post_json
 global secure_https_delete
+global secure_https_delete_with_header
 global secure_https_get
 global secure_https_put_empty
 global secure_https_put_json
+global secure_https_put_json_with_header
 global secure_https_patch_json
 global discord_token_ptr
 global discord_token_len
@@ -160,14 +162,21 @@ _start:
     lea rax, [expected_kick_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_kick_url_len
+    lea rax, [expected_audit_header_reason]
+    mov [expected_audit_header_ptr], rax
+    mov dword [expected_audit_header_len], expected_audit_header_reason_len
     lea rdi, [guild_id]
     mov esi, guild_id_len
     lea rdx, [user_id]
     mov ecx, user_id_len
+    lea r8, [audit_reason]
+    mov r9d, audit_reason_len
     call discord_kick_member
     test eax, eax
     jnz .fail
-    cmp qword [delete_calls], 3
+    cmp qword [delete_calls], 2
+    jne .fail
+    cmp qword [audit_delete_calls], 1
     jne .fail
     lea rax, [expected_unban_url]
     mov [expected_delete_ptr], rax
@@ -179,10 +188,58 @@ _start:
     mov esi, guild_id_len
     lea rdx, [user_id]
     mov ecx, user_id_len
+    lea r8, [audit_reason]
+    mov r9d, audit_reason_len
     call discord_ban_member
     test eax, eax
     jnz .fail
-    cmp qword [put_json_calls], 1
+    cmp qword [put_json_calls], 0
+    jne .fail
+    cmp qword [audit_put_json_calls], 1
+    jne .fail
+
+    ; Empty reason preserves the source default and still reaches the exact
+    ; audit-header transport path, while overlong input must stop beforehand.
+    mov dword [failure_stage], 7561
+    lea rax, [expected_audit_header_default]
+    mov [expected_audit_header_ptr], rax
+    mov dword [expected_audit_header_len], expected_audit_header_default_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    xor r8d, r8d
+    xor r9d, r9d
+    call discord_kick_member
+    test eax, eax
+    jnz .fail
+    cmp qword [audit_delete_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 7562
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [audit_reason_too_long]
+    mov r9d, audit_reason_too_long_len
+    call discord_kick_member
+    cmp eax, -1
+    jne .fail
+    cmp qword [audit_delete_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 7563
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [audit_reason_encoded_too_long]
+    mov r9d, audit_reason_encoded_too_long_len
+    call discord_kick_member
+    cmp eax, -1
+    jne .fail
+    cmp qword [audit_delete_calls], 2
     jne .fail
 
     mov dword [failure_stage], 757
@@ -199,7 +256,7 @@ _start:
     call discord_lock_channel
     test eax, eax
     jnz .fail
-    cmp qword [put_json_calls], 2
+    cmp qword [put_json_calls], 1
     jne .fail
 
     mov dword [failure_stage], 758
@@ -214,7 +271,7 @@ _start:
     call discord_unlock_channel
     test eax, eax
     jnz .fail
-    cmp qword [delete_calls], 4
+    cmp qword [delete_calls], 3
     jne .fail
     lea rax, [expected_unban_url]
     mov [expected_delete_ptr], rax
@@ -294,7 +351,7 @@ _start:
     call discord_unban_member
     cmp eax, -1
     jne .fail
-    cmp qword [delete_calls], 5
+    cmp qword [delete_calls], 4
     jne .fail
     mov qword [delete_status], 204
     lea rax, [expected_delete_url]
@@ -501,6 +558,49 @@ secure_https_delete:
     mov eax, -1
     ret
 
+; RDI=url, RSI=authorization, RDX=extra header, RCX=response, R8=capacity,
+; R9=status out. It carries opaque headers only; audit formatting stays NASM.
+secure_https_delete_with_header:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdx
+    mov r12, rcx
+    mov r13, r9
+    lea r10, [expected_kick_url]
+    mov r11d, expected_kick_url_len
+    call equal_cstring
+    test al, al
+    jz .audit_delete_fail
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jz .audit_delete_fail
+    mov rdi, rbx
+    mov r10, [expected_audit_header_ptr]
+    mov r11d, [expected_audit_header_len]
+    call equal_cstring
+    test al, al
+    jz .audit_delete_fail
+    cmp r8d, 2
+    jb .audit_delete_fail
+    test r13, r13
+    jz .audit_delete_fail
+    mov byte [r12], 0
+    mov rax, [delete_status]
+    mov [r13], rax
+    inc qword [audit_delete_calls]
+    xor eax, eax
+    jmp .audit_delete_out
+.audit_delete_fail:
+    mov eax, -1
+.audit_delete_out:
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=url, RSI=authorization, RDX=response, RCX=response cap, R8=status out.
 secure_https_get:
     push rbx
@@ -668,6 +768,64 @@ secure_https_put_json:
     mov eax, -1
     ret
 
+; RDI=url, RSI=authorization, RDX=extra header, RCX=JSON body, R8=len,
+; R9=response, [RSP+8]=capacity, [RSP+16]=status out.
+secure_https_put_json_with_header:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rbx, rdx
+    mov r12, rcx
+    mov r13d, r8d
+    mov r14, r9
+    mov r15, [rsp + 48]
+    mov r8, [rsp + 56]
+    lea r10, [expected_unban_url]
+    mov r11d, expected_unban_url_len
+    call equal_cstring
+    test al, al
+    jz .audit_put_fail
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jz .audit_put_fail
+    mov rdi, rbx
+    mov r10, [expected_audit_header_ptr]
+    mov r11d, [expected_audit_header_len]
+    call equal_cstring
+    test al, al
+    jz .audit_put_fail
+    cmp r13d, ban_body_len
+    jne .audit_put_fail
+    mov rdi, r12
+    lea rsi, [ban_body]
+    mov edx, ban_body_len
+    call equal_bytes
+    test al, al
+    jz .audit_put_fail
+    cmp r15d, 2
+    jb .audit_put_fail
+    test r8, r8
+    jz .audit_put_fail
+    mov byte [r14], 0
+    mov rax, [put_status]
+    mov [r8], rax
+    inc qword [audit_put_json_calls]
+    xor eax, eax
+    jmp .audit_put_out
+.audit_put_fail:
+    mov eax, -1
+.audit_put_out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=url, RSI=authorization, RDX=response, RCX=response cap, [RSP+8]=status out.
 secure_https_put_empty:
     lea r10, [expected_role_url]
@@ -798,6 +956,16 @@ get_payload: db '{}'
 get_payload_len equ $ - get_payload
 expected_authorization: db 'Authorization: Bot token-value'
 expected_authorization_len equ $ - expected_authorization
+audit_reason: db 'Escalated: 50% & review'
+audit_reason_len equ $ - audit_reason
+expected_audit_header_reason: db 'X-Audit-Log-Reason: Escalated%3A%2050%25%20%26%20review'
+expected_audit_header_reason_len equ $ - expected_audit_header_reason
+expected_audit_header_default: db 'X-Audit-Log-Reason: Tidak%20ada%20alasan'
+expected_audit_header_default_len equ $ - expected_audit_header_default
+audit_reason_too_long: times 513 db 'a'
+audit_reason_too_long_len equ $ - audit_reason_too_long
+audit_reason_encoded_too_long: times 171 db ' '
+audit_reason_encoded_too_long_len equ $ - audit_reason_encoded_too_long
 expected_body: db '{"content":"say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5c, ' L', 0x5c, 'n', 'T', 0x5c, 't', 'C', 0x5c, 'u0001', '"}'
 expected_body_len equ $ - expected_body
 oversized_text: times 2001 db 'x'
@@ -812,6 +980,7 @@ delete_status: dq 0
 expected_delete_ptr: dq 0
 expected_delete_len: dd 0
 delete_calls: dq 0
+audit_delete_calls: dq 0
 get_calls: dq 0
 get_status: dq 0
 patch_status: dq 0
@@ -821,11 +990,14 @@ expected_patch_body_len: dd 0
 put_status: dq 0
 put_calls: dq 0
 put_json_calls: dq 0
+audit_put_json_calls: dq 0
 put_json_body_ptr: dq 0
 expected_put_url_ptr: dq 0
 expected_put_url_len: dd 0
 expected_put_body_ptr: dq 0
 expected_put_body_len: dd 0
+expected_audit_header_ptr: dq 0
+expected_audit_header_len: dd 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 

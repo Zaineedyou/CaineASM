@@ -1157,8 +1157,13 @@ dispatch_message_create:
     test eax, eax
     jle .kick_usage
     mov [moderation_target_len], eax
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_tail_after_mention
+    mov [moderation_reason_ptr], rdi
+    mov [moderation_reason_len], esi
     lea rdi, [config_value]
-    mov esi, eax
+    mov esi, [moderation_target_len]
     call dispatch_bot_above_target
     test al, al
     jz .hierarchy_denied
@@ -1166,6 +1171,8 @@ dispatch_message_create:
     mov esi, [guild_id_len]
     lea rdx, [config_value]
     mov ecx, [moderation_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
     call discord_kick_member
     test eax, eax
     jnz .moderation_error
@@ -1330,8 +1337,13 @@ dispatch_message_create:
     test eax, eax
     jle .ban_usage
     mov [moderation_target_len], eax
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_tail_after_mention
+    mov [moderation_reason_ptr], rdi
+    mov [moderation_reason_len], esi
     lea rdi, [config_value]
-    mov esi, eax
+    mov esi, [moderation_target_len]
     call dispatch_bot_above_target
     test al, al
     jz .hierarchy_denied
@@ -1339,6 +1351,8 @@ dispatch_message_create:
     mov esi, [guild_id_len]
     lea rdx, [config_value]
     mov ecx, [moderation_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
     call discord_ban_member
     test eax, eax
     jnz .moderation_error
@@ -3052,6 +3066,8 @@ config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
 warning_target_len: resd 1
 moderation_target_len: resd 1
+moderation_reason_ptr: resq 1
+moderation_reason_len: resd 1
 role_target_len: resd 1
 role_requested_len: resd 1
 role_action: resd 1
