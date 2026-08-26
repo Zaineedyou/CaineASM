@@ -25,6 +25,7 @@ extern guild_channel_disable
 extern guild_channel_enable
 extern guild_channel_is_disabled
 extern guild_config_set
+extern guild_config_delete
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -52,6 +53,14 @@ extern bot_prefix_len
 %define CMD_SETPERSONA 22
 %define CMD_SETMODEL 23
 %define CMD_SETHISTORY 24
+%define CMD_AUTOROLE 25
+%define CMD_SETWELCOME 26
+%define CMD_SETGOODBYE 27
+%define CMD_REMOVEAUTOROLE 28
+%define CMD_SETLEVELCHANNEL 29
+%define CMD_SETLOG 30
+%define CMD_SETWELCOMEMSG 31
+%define CMD_SETGOODBYEMSG 32
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -279,6 +288,22 @@ dispatch_message_create:
     je .setmodel
     cmp eax, CMD_SETHISTORY
     je .sethistory
+    cmp eax, CMD_AUTOROLE
+    je .autorole
+    cmp eax, CMD_REMOVEAUTOROLE
+    je .removeautorole
+    cmp eax, CMD_SETWELCOME
+    je .setwelcome
+    cmp eax, CMD_SETGOODBYE
+    je .setgoodbye
+    cmp eax, CMD_SETLEVELCHANNEL
+    je .setlevelchannel
+    cmp eax, CMD_SETLOG
+    je .setlog
+    cmp eax, CMD_SETWELCOMEMSG
+    je .setwelcomemsg
+    cmp eax, CMD_SETGOODBYEMSG
+    je .setgoodbyemsg
     test eax, eax
     jz .unknown
     lea rdi, [registered_notice]
@@ -590,6 +615,152 @@ dispatch_message_create:
     lea rdi, [history_usage_response]
     mov esi, history_usage_response_len
     jmp .reply
+.autorole:
+    lea rdi, [setting_autorole]
+    mov esi, setting_autorole_len
+    lea rdx, [role_saved_response]
+    mov ecx, role_saved_response_len
+    jmp .config_role
+.removeautorole:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_autorole]
+    mov ecx, setting_autorole_len
+    call guild_config_delete
+    test eax, eax
+    jnz .policy_error
+    lea rdi, [role_removed_response]
+    mov esi, role_removed_response_len
+    jmp .reply
+.setwelcome:
+    lea rdi, [setting_welcome_channel]
+    mov esi, setting_welcome_channel_len
+    lea rdx, [channel_saved_response]
+    mov ecx, channel_saved_response_len
+    jmp .config_channel
+.setgoodbye:
+    lea rdi, [setting_goodbye_channel]
+    mov esi, setting_goodbye_channel_len
+    lea rdx, [channel_saved_response]
+    mov ecx, channel_saved_response_len
+    jmp .config_channel
+.setlevelchannel:
+    lea rdi, [setting_level_channel]
+    mov esi, setting_level_channel_len
+    lea rdx, [channel_saved_response]
+    mov ecx, channel_saved_response_len
+    jmp .config_channel
+.setlog:
+    lea rdi, [setting_log_channel]
+    mov esi, setting_log_channel_len
+    lea rdx, [channel_saved_response]
+    mov ecx, channel_saved_response_len
+    jmp .config_channel
+.config_channel:
+    mov [config_setting_ptr], rdi
+    mov [config_setting_len], esi
+    mov [config_success_ptr], rdx
+    mov [config_success_len], ecx
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .channel_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '#'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .channel_usage
+    mov [config_value_len], eax
+    lea rdi, [config_value]
+    mov esi, eax
+    mov rdx, [config_setting_ptr]
+    mov ecx, [config_setting_len]
+    xchg rdi, rdx
+    xchg esi, ecx
+    lea rdx, [config_value]
+    mov ecx, [config_value_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    mov rdi, [config_success_ptr]
+    mov esi, [config_success_len]
+    jmp .reply
+.channel_usage:
+    lea rdi, [channel_usage_response]
+    mov esi, channel_usage_response_len
+    jmp .reply
+.config_role:
+    mov [config_setting_ptr], rdi
+    mov [config_setting_len], esi
+    mov [config_success_ptr], rdx
+    mov [config_success_len], ecx
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .role_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '&'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .role_usage
+    mov [config_value_len], eax
+    lea rdi, [config_value]
+    mov esi, eax
+    mov rdx, [config_setting_ptr]
+    mov ecx, [config_setting_len]
+    xchg rdi, rdx
+    xchg esi, ecx
+    lea rdx, [config_value]
+    mov ecx, [config_value_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    mov rdi, [config_success_ptr]
+    mov esi, [config_success_len]
+    jmp .reply
+.role_usage:
+    lea rdi, [role_usage_response]
+    mov esi, role_usage_response_len
+    jmp .reply
+.setwelcomemsg:
+    lea rdi, [setting_welcome_message]
+    mov esi, setting_welcome_message_len
+    jmp .config_text
+.setgoodbyemsg:
+    lea rdi, [setting_goodbye_message]
+    mov esi, setting_goodbye_message_len
+.config_text:
+    mov [config_setting_ptr], rdi
+    mov [config_setting_len], esi
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .text_usage
+    mov rdi, [config_setting_ptr]
+    mov esi, [config_setting_len]
+    mov rdx, [dispatch_tail_ptr]
+    mov ecx, [dispatch_tail_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    lea rdi, [text_saved_response]
+    mov esi, text_saved_response_len
+    jmp .reply
+.text_usage:
+    lea rdi, [text_usage_response]
+    mov esi, text_usage_response_len
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
@@ -727,6 +898,68 @@ dispatch_tail_after_command:
     xor esi, esi
     mov qword [dispatch_tail_ptr], 0
     mov dword [dispatch_tail_len], 0
+    ret
+
+; RDI=tail bytes, ESI=len, DL='#' for <#id> or '&' for <@&id>.
+; EAX=extracted decimal ID len, or -1. The ID is copied into config_value.
+dispatch_extract_mention_id:
+    push rbx
+    push r12
+    mov rbx, rdi
+    mov r12d, esi
+    xor ecx, ecx
+.scan:
+    cmp ecx, r12d
+    jae .bad
+    cmp byte [rbx + rcx], '<'
+    jne .advance
+    cmp dl, '#'
+    jne .role_open
+    lea eax, [rcx + 2]
+    cmp eax, r12d
+    jae .bad
+    cmp byte [rbx + rcx + 1], '#'
+    jne .advance
+    jmp .digits
+.role_open:
+    lea eax, [rcx + 3]
+    cmp eax, r12d
+    jae .bad
+    cmp byte [rbx + rcx + 1], '@'
+    jne .advance
+    cmp byte [rbx + rcx + 2], '&'
+    jne .advance
+.digits:
+    xor esi, esi
+.digit_loop:
+    cmp eax, r12d
+    jae .bad
+    cmp esi, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov r8b, [rbx + rax]
+    cmp r8b, '>'
+    je .done
+    cmp r8b, '0'
+    jb .bad
+    cmp r8b, '9'
+    ja .bad
+    mov [config_value + rsi], r8b
+    inc esi
+    inc eax
+    jmp .digit_loop
+.done:
+    test esi, esi
+    jz .bad
+    mov eax, esi
+    jmp .out
+.advance:
+    inc ecx
+    jmp .scan
+.bad:
+    mov eax, -1
+.out:
+    pop r12
+    pop rbx
     ret
 
 ; RDI=tail, ESI=tail length. EAX=lower-cased first token length, or -1.
@@ -1020,6 +1253,34 @@ setting_history: db 'history'
 setting_history_len equ $ - setting_history
 setting_model: db 'model'
 setting_model_len equ $ - setting_model
+setting_autorole: db 'autorole'
+setting_autorole_len equ $ - setting_autorole
+setting_welcome_channel: db 'welcome_channel'
+setting_welcome_channel_len equ $ - setting_welcome_channel
+setting_goodbye_channel: db 'goodbye_channel'
+setting_goodbye_channel_len equ $ - setting_goodbye_channel
+setting_level_channel: db 'level_channel'
+setting_level_channel_len equ $ - setting_level_channel
+setting_log_channel: db 'log_channel'
+setting_log_channel_len equ $ - setting_log_channel
+setting_welcome_message: db 'welcome_message'
+setting_welcome_message_len equ $ - setting_welcome_message
+setting_goodbye_message: db 'goodbye_message'
+setting_goodbye_message_len equ $ - setting_goodbye_message
+channel_usage_response: db 'Usage: mention a channel.'
+channel_usage_response_len equ $ - channel_usage_response
+role_usage_response: db 'Usage: mention a role.'
+role_usage_response_len equ $ - role_usage_response
+text_usage_response: db 'Usage: provide message text.'
+text_usage_response_len equ $ - text_usage_response
+channel_saved_response: db 'Guild channel setting saved.'
+channel_saved_response_len equ $ - channel_saved_response
+role_saved_response: db 'Guild auto-role saved.'
+role_saved_response_len equ $ - role_saved_response
+role_removed_response: db 'Guild auto-role removed.'
+role_removed_response_len equ $ - role_removed_response
+text_saved_response: db 'Guild message setting saved.'
+text_saved_response_len equ $ - text_saved_response
 model_usage_response: db 'Usage: setmodel llama70b|gpt120b|gpt20b|qwen32b.'
 model_usage_response_len equ $ - model_usage_response
 model_saved_response: db 'Guild model saved.'
@@ -1093,6 +1354,12 @@ dispatch_tail_ptr: resq 1
 dispatch_tail_len: resd 1
 dispatch_model_ptr: resq 1
 dispatch_model_len: resd 1
+config_setting_ptr: resq 1
+config_setting_len: resd 1
+config_success_ptr: resq 1
+config_success_len: resd 1
+config_value_len: resd 1
+config_value: resb AUTHOR_ID_CAP
 rank_response: resb 32
 rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP

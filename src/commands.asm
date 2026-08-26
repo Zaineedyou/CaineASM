@@ -35,7 +35,13 @@ global command_is_admin_only
 %define CMD_SETHISTORY  24
 %define CMD_AUTOROLE    25
 %define CMD_SETWELCOME  26
-%define CMD_SETGOODBYE  27
+%define CMD_SETGOODBYE 27
+%define CMD_REMOVEAUTOROLE 28
+%define CMD_SETLEVELCHANNEL 29
+%define CMD_SETLOG 30
+%define CMD_SETWELCOMEMSG 31
+%define CMD_SETGOODBYEMSG 32
+
 
 section .text
 command_classify:
@@ -102,6 +108,16 @@ command_is_admin_only:
     je .yes
     cmp edi, CMD_SETGOODBYE
     je .yes
+    cmp edi, CMD_REMOVEAUTOROLE
+    je .yes
+    cmp edi, CMD_SETLEVELCHANNEL
+    je .yes
+    cmp edi, CMD_SETLOG
+    je .yes
+    cmp edi, CMD_SETWELCOMEMSG
+    je .yes
+    cmp edi, CMD_SETGOODBYEMSG
+    je .yes
     xor eax, eax
     ret
 .yes:
@@ -154,6 +170,11 @@ s_sethistory: db 'sethistory'
 s_autorole: db 'autorole'
 s_setwelcome: db 'setwelcome'
 s_setgoodbye: db 'setgoodbye'
+s_removeautorole: db 'removeautorole'
+s_setlevelchannel: db 'setlevelchannel'
+s_setlog: db 'setlog'
+s_setwelcomemsg: db 'setwelcomemsg'
+s_setgoodbyemsg: db 'setgoodbyemsg'
 
 align 8
 command_table:
@@ -211,5 +232,15 @@ command_table:
     dq s_setwelcome
     dd CMD_SETGOODBYE, 10
     dq s_setgoodbye
+    dd CMD_REMOVEAUTOROLE, 14
+    dq s_removeautorole
+    dd CMD_SETLEVELCHANNEL, 15
+    dq s_setlevelchannel
+    dd CMD_SETLOG, 6
+    dq s_setlog
+    dd CMD_SETWELCOMEMSG, 13
+    dq s_setwelcomemsg
+    dd CMD_SETGOODBYEMSG, 13
+    dq s_setgoodbyemsg
     dd 0, 0
     dq 0

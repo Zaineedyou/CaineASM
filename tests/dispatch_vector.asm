@@ -21,6 +21,7 @@ global guild_channel_disable
 global guild_channel_enable
 global guild_channel_is_disabled
 global guild_config_set
+global guild_config_delete
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -280,8 +281,82 @@ _start:
     cmp qword [config_set_calls], 3
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 17
+    lea rax, [channel_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], channel_saved_response_len
+    lea rax, [setting_log_channel]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_log_channel_len
+    lea rax, [log_channel_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], log_channel_value_len
+    lea rdi, [setlog_event]
+    mov esi, setlog_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 15
+    jne .fail
+    cmp qword [config_set_calls], 4
+    jne .fail
+
+    mov dword [failure_stage], 18
+    lea rax, [role_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], role_saved_response_len
+    lea rax, [setting_autorole]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_autorole_len
+    lea rax, [role_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], role_value_len
+    lea rdi, [autorole_event]
+    mov esi, autorole_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 16
+    jne .fail
+    cmp qword [config_set_calls], 5
+    jne .fail
+
+    mov dword [failure_stage], 19
+    lea rax, [role_removed_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], role_removed_response_len
+    lea rdi, [removeautorole_event]
+    mov esi, removeautorole_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 17
+    jne .fail
+    cmp qword [config_delete_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 20
+    lea rax, [text_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], text_saved_response_len
+    lea rax, [setting_welcome_message]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_welcome_message_len
+    lea rax, [welcome_message_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], welcome_message_value_len
+    lea rdi, [welcomemsg_event]
+    mov esi, welcomemsg_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 18
+    jne .fail
+    cmp qword [config_set_calls], 6
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 21
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -290,7 +365,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 15
+    cmp qword [send_calls], 19
     jne .fail
 
     mov eax, SYS_EXIT
@@ -406,6 +481,11 @@ guild_config_set:
     mov eax, -1
     pop r12
     pop rbx
+    ret
+
+guild_config_delete:
+    inc qword [config_delete_calls]
+    xor eax, eax
     ret
 
 ; Formatter seams verify dispatch's guild and exact Discord-capacity contract.
@@ -652,6 +732,14 @@ history_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","chann
 history_event_len equ $ - history_event
 model_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setmodel GPT120B","author":{"id":"user-2","bot":false}}}'
 model_event_len equ $ - model_event
+setlog_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setlog <#987654>","author":{"id":"user-2","bot":false}}}'
+setlog_event_len equ $ - setlog_event
+autorole_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^autorole <@&111222>","author":{"id":"user-2","bot":false}}}'
+autorole_event_len equ $ - autorole_event
+removeautorole_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^removeautorole","author":{"id":"user-2","bot":false}}}'
+removeautorole_event_len equ $ - removeautorole_event
+welcomemsg_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setwelcomemsg Welcome {user}","author":{"id":"user-2","bot":false}}}'
+welcomemsg_event_len equ $ - welcomemsg_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -690,6 +778,26 @@ model_saved_response: db 'Guild model saved.'
 model_saved_response_len equ $ - model_saved_response
 setting_model: db 'model'
 setting_model_len equ $ - setting_model
+setting_log_channel: db 'log_channel'
+setting_log_channel_len equ $ - setting_log_channel
+setting_autorole: db 'autorole'
+setting_autorole_len equ $ - setting_autorole
+setting_welcome_message: db 'welcome_message'
+setting_welcome_message_len equ $ - setting_welcome_message
+log_channel_value: db '987654'
+log_channel_value_len equ $ - log_channel_value
+role_value: db '111222'
+role_value_len equ $ - role_value
+welcome_message_value: db 'Welcome {user}'
+welcome_message_value_len equ $ - welcome_message_value
+channel_saved_response: db 'Guild channel setting saved.'
+channel_saved_response_len equ $ - channel_saved_response
+role_saved_response: db 'Guild auto-role saved.'
+role_saved_response_len equ $ - role_saved_response
+role_removed_response: db 'Guild auto-role removed.'
+role_removed_response_len equ $ - role_removed_response
+text_saved_response: db 'Guild message setting saved.'
+text_saved_response_len equ $ - text_saved_response
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
 
@@ -712,4 +820,5 @@ word_remove_calls: dq 0
 channel_disable_calls: dq 0
 channel_enable_calls: dq 0
 config_set_calls: dq 0
+config_delete_calls: dq 0
 failure_stage: dd 0
