@@ -4,6 +4,7 @@ DEFAULT REL
 global discord_send_text
 global discord_delete_message
 global discord_get_json
+global discord_get_channel_messages
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -42,6 +43,8 @@ extern discord_token_len
 %define TIMEOUT_BODY_CAP 64
 %define NICK_BYTES_MAX 128
 %define NICK_CHARS_MAX 32
+%define CLEAR_FETCH_MIN 2
+%define CLEAR_FETCH_MAX 100
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -224,6 +227,94 @@ discord_get_json:
     pop rbx
     ret
 
+; RDI=channel, ESI=len, RDX=response, ECX=capacity, R8D=limit (2..100).
+; RAX=response bytes only after a bounded authenticated Discord GET. This
+; primitive does not parse messages or build delete policy.
+discord_get_channel_messages:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov ebx, r8d
+    test r13d, r13d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    test r14, r14
+    jz .bad
+    cmp r15d, 2
+    jb .bad
+    cmp ebx, CLEAR_FETCH_MIN
+    jb .bad
+    cmp ebx, CLEAR_FETCH_MAX
+    ja .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, url_prefix_len
+    add eax, r13d
+    add eax, url_suffix_len
+    add eax, clear_limit_prefix_len
+    add eax, 3
+    cmp eax, GET_URL_CAP - 1
+    ja .bad
+    lea rdi, [get_url]
+    lea rsi, [url_prefix]
+    mov edx, url_prefix_len
+    call copy_bytes
+    lea rdi, [get_url + url_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [get_url + url_prefix_len]
+    add rdi, r13
+    lea rsi, [url_suffix]
+    mov edx, url_suffix_len
+    call copy_bytes
+    lea rdi, [get_url + url_prefix_len]
+    add rdi, r13
+    add rdi, url_suffix_len
+    lea rsi, [clear_limit_prefix]
+    mov edx, clear_limit_prefix_len
+    call copy_bytes
+    lea rdi, [get_url + url_prefix_len]
+    add rdi, r13
+    add rdi, url_suffix_len
+    add rdi, clear_limit_prefix_len
+    mov rax, rbx
+    call append_uint_decimal
+    test eax, eax
+    js .bad
+    mov edx, eax
+    mov eax, url_prefix_len
+    add eax, r13d
+    add eax, url_suffix_len
+    add eax, clear_limit_prefix_len
+    add eax, edx
+    mov [clear_get_url_len], eax
+    mov byte [get_url + rax], 0
+    lea rdi, [get_url]
+    mov esi, eax
+    mov rdx, r14
+    mov ecx, r15d
+    call discord_get_json
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=channel ID, ESI=channel length, RDX=message ID, ECX=message length.
 ; EAX=0 only for Discord HTTP 2xx. Authorization and route construction stay NASM-owned.
 discord_delete_message:
@@ -1828,6 +1919,8 @@ url_prefix: db 'https://discord.com/api/v10/channels/'
 url_prefix_len equ $ - url_prefix
 url_suffix: db '/messages'
 url_suffix_len equ $ - url_suffix
+clear_limit_prefix: db '?limit='
+clear_limit_prefix_len equ $ - clear_limit_prefix
 channel_permission_prefix: db 'https://discord.com/api/v10/channels/'
 channel_permission_prefix_len equ $ - channel_permission_prefix
 channel_permission_middle: db '/permissions/'
@@ -1889,6 +1982,7 @@ timestamp_second: dd 0
 timeout_expiry_epoch: dq 0
 nick_ptr: dq 0
 nick_len: dd 0
+clear_get_url_len: dd 0
 audit_reason_ptr: dq 0
 audit_reason_len: dd 0
 section .bss

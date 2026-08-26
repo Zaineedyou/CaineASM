@@ -4,6 +4,7 @@ DEFAULT REL
 extern discord_send_text
 extern discord_delete_message
 extern discord_get_json
+extern discord_get_channel_messages
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -49,6 +50,9 @@ _start:
     lea rax, [expected_delete_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_delete_url_len
+    lea rax, [expected_get_url]
+    mov [expected_get_url_ptr], rax
+    mov dword [expected_get_url_len_dynamic], expected_get_url_len
     lea rax, [expected_slowmode_url]
     mov [expected_patch_url_ptr], rax
     mov dword [expected_patch_url_len], expected_slowmode_url_len
@@ -537,6 +541,38 @@ _start:
     cmp qword [get_calls], 2
     jne .fail
 
+    mov dword [failure_stage], 83
+    mov qword [get_status], 200
+    lea rax, [expected_clear_get_url]
+    mov [expected_get_url_ptr], rax
+    mov dword [expected_get_url_len_dynamic], expected_clear_get_url_len
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [get_response]
+    mov ecx, 16
+    mov r8d, 11
+    call discord_get_channel_messages
+    cmp rax, get_payload_len
+    jne .fail
+    cmp qword [get_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 84
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [get_response]
+    mov ecx, 16
+    mov r8d, 1
+    call discord_get_channel_messages
+    cmp rax, -1
+    jne .fail
+    cmp qword [get_calls], 3
+    jne .fail
+
+    lea rax, [expected_get_url]
+    mov [expected_get_url_ptr], rax
+    mov dword [expected_get_url_len_dynamic], expected_get_url_len
+
     mov dword [failure_stage], 10
     mov qword [put_status], 204
     lea rdi, [channel_id]
@@ -603,7 +639,7 @@ _start:
     call discord_get_json
     cmp rax, -1
     jne .fail
-    cmp qword [get_calls], 2
+    cmp qword [get_calls], 3
     jne .fail
 
     mov eax, SYS_EXIT
@@ -752,8 +788,8 @@ secure_https_delete_with_header:
 secure_https_get:
     push rbx
     mov rbx, rdx
-    lea r10, [expected_get_url]
-    mov r11d, expected_get_url_len
+    mov r10, [expected_get_url_ptr]
+    mov r11d, [expected_get_url_len_dynamic]
     call equal_cstring
     test al, al
     jz .get_fail
@@ -1117,6 +1153,8 @@ lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
 lock_body_len equ $ - lock_body
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_get_url_len equ $ - expected_get_url
+expected_clear_get_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages?limit=11'
+expected_clear_get_url_len equ $ - expected_clear_get_url
 bad_get_url: db 'https://example.invalid/api/v10/guilds/1'
 bad_get_url_len equ $ - bad_get_url
 get_payload: db '{}'
@@ -1150,6 +1188,8 @@ delete_calls: dq 0
 audit_delete_calls: dq 0
 get_calls: dq 0
 get_status: dq 0
+expected_get_url_ptr: dq 0
+expected_get_url_len_dynamic: dd 0
 patch_status: dq 0
 patch_calls: dq 0
 expected_patch_url_ptr: dq 0
