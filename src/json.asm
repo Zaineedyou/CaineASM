@@ -7,6 +7,7 @@ global json_read_uint
 global json_read_string
 global json_value_is_true
 global json_object_end
+global json_array_end
 
 ; RDI=destination, ESI=destination capacity, RDX=source, ECX=source length.
 ; RAX=escaped byte length, or -1 when the bounded destination is insufficient.
@@ -416,6 +417,54 @@ json_object_end:
     cmp al, '{'
     je .open
     cmp al, '}'
+    je .close
+    jmp .loop
+.open:
+    inc r8d
+    jmp .loop
+.close:
+    dec r8d
+    jnz .loop
+    mov rax, rdi
+    ret
+.string:
+    cmp rdi, rsi
+    jae .bad
+    mov al, [rdi]
+    inc rdi
+    cmp al, 0x5c
+    je .escaped
+    cmp al, '"'
+    je .loop
+    jmp .string
+.escaped:
+    cmp rdi, rsi
+    jae .bad
+    inc rdi
+    jmp .string
+.bad:
+    xor eax, eax
+    ret
+
+; RDI=opening array bracket, RSI=exclusive input end. RAX=first byte after the
+; matching closing bracket, or zero for malformed/truncated JSON. JSON strings
+; and escapes are skipped so brackets inside a string do not alter depth.
+json_array_end:
+    cmp rdi, rsi
+    jae .bad
+    cmp byte [rdi], '['
+    jne .bad
+    xor r8d, r8d
+.loop:
+    cmp rdi, rsi
+    jae .bad
+    mov al, [rdi]
+    inc rdi
+    cmp al, '"'
+    je .string
+    cmp al, '['
+    je .open
+    cmp al, ']'
     je .close
     jmp .loop
 .open:

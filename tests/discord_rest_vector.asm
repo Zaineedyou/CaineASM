@@ -3,11 +3,13 @@ DEFAULT REL
 
 extern discord_send_text
 extern discord_delete_message
+extern discord_get_json
 extern json_escape_append
 
 global _start
 global secure_https_post_json
 global secure_https_delete
+global secure_https_get
 global discord_token_ptr
 global discord_token_len
 
@@ -118,6 +120,49 @@ _start:
     cmp qword [delete_calls], 1
     jne .fail
 
+    mov dword [failure_stage], 8
+    mov qword [get_status], 200
+    lea rdi, [expected_get_url]
+    mov esi, expected_get_url_len
+    lea rdx, [get_response]
+    mov ecx, 16
+    call discord_get_json
+    mov dword [failure_stage], 81
+    cmp rax, get_payload_len
+    jne .fail
+    cmp qword [get_calls], 1
+    jne .fail
+    mov dword [failure_stage], 82
+    lea rdi, [get_response]
+    lea rsi, [get_payload]
+    mov edx, get_payload_len
+    call equal_bytes
+    test al, al
+    jz .fail
+
+    mov dword [failure_stage], 9
+    mov qword [get_status], 403
+    lea rdi, [expected_get_url]
+    mov esi, expected_get_url_len
+    lea rdx, [get_response]
+    mov ecx, 16
+    call discord_get_json
+    cmp rax, -1
+    jne .fail
+    cmp qword [get_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 10
+    lea rdi, [bad_get_url]
+    mov esi, bad_get_url_len
+    lea rdx, [get_response]
+    mov ecx, 16
+    call discord_get_json
+    cmp rax, -1
+    jne .fail
+    cmp qword [get_calls], 2
+    jne .fail
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -217,6 +262,43 @@ secure_https_delete:
     mov eax, -1
     ret
 
+; RDI=url, RSI=authorization, RDX=response, RCX=response cap, R8=status out.
+secure_https_get:
+    push rbx
+    mov rbx, rdx
+    lea r10, [expected_get_url]
+    mov r11d, expected_get_url_len
+    call equal_cstring
+    test al, al
+    jz .get_fail
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jz .get_fail
+    cmp rcx, get_payload_len + 1
+    jb .get_fail
+    test r8, r8
+    jz .get_fail
+    mov r9, rbx
+    lea rsi, [get_payload]
+    mov edx, get_payload_len
+    mov rdi, r9
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    mov rax, [get_status]
+    mov [r8], rax
+    inc qword [get_calls]
+    mov eax, get_payload_len
+    pop rbx
+    ret
+.get_fail:
+    mov dword [mock_failure_reason], 31
+    mov eax, -1
+    pop rbx
+    ret
+
 ; RDI=C string; R10=expected bytes; R11D=expected len. AL=1 on exact match.
 equal_cstring:
     xor eax, eax
@@ -235,6 +317,19 @@ equal_cstring:
     ret
 .no:
     xor eax, eax
+    ret
+
+; RDI=destination, RSI=source, EDX=count.
+copy_bytes:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .done
+    mov al, [rsi + rcx]
+    mov [rdi + rcx], al
+    inc ecx
+    jmp .loop
+.done:
     ret
 
 ; RDI and RSI buffers, EDX count. AL=1 when equal.
@@ -272,6 +367,12 @@ message_id: db '987654321098765432'
 message_id_len equ $ - message_id
 expected_delete_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/987654321098765432'
 expected_delete_url_len equ $ - expected_delete_url
+expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
+expected_get_url_len equ $ - expected_get_url
+bad_get_url: db 'https://example.invalid/api/v10/guilds/1'
+bad_get_url_len equ $ - bad_get_url
+get_payload: db '{}'
+get_payload_len equ $ - get_payload
 expected_authorization: db 'Authorization: Bot token-value'
 expected_authorization_len equ $ - expected_authorization
 expected_body: db '{"content":"say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5c, ' L', 0x5c, 'n', 'T', 0x5c, 't', 'C', 0x5c, 'u0001', '"}'
@@ -284,10 +385,13 @@ discord_token_ptr: dq 0
 discord_token_len: dd 0
 mock_status: dq 0
 mock_calls: dq 0
-delete_calls: dq 0
 delete_status: dq 0
+delete_calls: dq 0
+get_calls: dq 0
+get_status: dq 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 
 section .bss
 escape_output: resb 64
+get_response: resb 16

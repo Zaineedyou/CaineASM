@@ -3,9 +3,11 @@ DEFAULT REL
 
 global discord_send_text
 global discord_delete_message
+global discord_get_json
 
 extern secure_https_post_json
 extern secure_https_delete
+extern secure_https_get
 extern json_escape_append
 extern discord_token_ptr
 extern discord_token_len
@@ -14,6 +16,7 @@ extern discord_token_len
 %define AUTHORIZATION_CAP 512
 %define JSON_BODY_CAP 12288
 %define RESPONSE_BODY_CAP 4096
+%define GET_URL_CAP 512
 %define DISCORD_TEXT_MAX 2000
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
@@ -117,6 +120,80 @@ discord_send_text:
     mov eax, -1
 .out:
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=URL, ESI=URL length, RDX=response destination, ECX=response capacity.
+; RAX=response byte length only for Discord HTTP 2xx, or -1 on invalid input,
+; transport failure, or non-success HTTP status. Route policy stays with NASM
+; callers; the C adapter receives only a fully constructed HTTPS request.
+discord_get_json:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov ebx, ecx
+    test r12, r12
+    jz .bad
+    test r14, r14
+    jz .bad
+    cmp r13d, api_url_prefix_len
+    jb .bad
+    cmp r13d, GET_URL_CAP - 1
+    ja .bad
+    cmp ebx, 2
+    jb .bad
+    mov rdi, r12
+    lea rsi, [api_url_prefix]
+    mov edx, api_url_prefix_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    lea rdi, [get_url]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    mov byte [get_url + r13], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [get_url]
+    lea rsi, [authorization]
+    mov rdx, r14
+    mov ecx, ebx
+    lea r8, [response_status]
+    call secure_https_get
+    test rax, rax
+    js .bad
+    mov rdx, [response_status]
+    cmp rdx, 200
+    jb .bad
+    cmp rdx, 300
+    jae .bad
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    add rsp, 8
     pop r14
     pop r13
     pop r12
@@ -230,6 +307,24 @@ call_secure_post:
     add rsp, 8
     ret
 
+; RDI and RSI buffers, EDX=count. AL=1 when equal.
+equal_bytes:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, [rsi + rcx]
+    jne .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 ; RDI=identifier bytes, ESI=length. AL=1 when the identifier contains only ASCII digits.
 is_decimal_identifier:
     xor edx, edx
@@ -263,6 +358,8 @@ copy_bytes:
     ret
 
 section .rodata
+api_url_prefix: db 'https://discord.com/api/v10/'
+api_url_prefix_len equ $ - api_url_prefix
 url_prefix: db 'https://discord.com/api/v10/channels/'
 url_prefix_len equ $ - url_prefix
 url_suffix: db '/messages'
@@ -279,6 +376,7 @@ response_status: dq 0
 
 section .bss
 request_url: resb REQUEST_URL_CAP
+get_url: resb GET_URL_CAP
 authorization: resb AUTHORIZATION_CAP
 json_body: resb JSON_BODY_CAP
 response_body: resb RESPONSE_BODY_CAP

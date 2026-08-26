@@ -21,6 +21,8 @@ extern json_read_string
 extern json_escape_append
 extern json_value_is_true
 extern dispatch_message_create
+extern guild_auth_reset
+extern guild_auth_cache_guild_create
 
 %define SYS_NANOSLEEP 35
 %define SYS_CLOCK_GETTIME 228
@@ -160,6 +162,13 @@ gateway_process_frame:
     jnz .resumed
     lea rdi, [event_name]
     mov esi, r14d
+    lea rdx, [event_guild_create]
+    mov ecx, event_guild_create_len
+    call literal_equal
+    test al, al
+    jnz .guild_create
+    lea rdi, [event_name]
+    mov esi, r14d
     lea rdx, [event_message_create]
     mov ecx, event_message_create_len
     call literal_equal
@@ -176,6 +185,13 @@ gateway_process_frame:
     jmp .none
 .resumed:
     mov byte [identified], 1
+    jmp .none
+.guild_create:
+    mov rdi, r12
+    mov rsi, r13
+    call guild_auth_cache_guild_create
+    ; Cache failures fail closed for role-derived authorization but do not
+    ; invalidate an otherwise healthy Gateway session.
     jmp .none
 .message_create:
     mov rdi, r12
@@ -655,6 +671,9 @@ gateway_now_ms:
 
 ; Clears all Gateway session and heartbeat state for a process start.
 gateway_reset_state:
+    sub rsp, 8
+    call guild_auth_reset
+    add rsp, 8
     mov byte [identified], 0
     mov byte [hello_received], 0
     mov byte [heartbeat_ack_pending], 0
@@ -700,6 +719,8 @@ event_ready: db 'READY'
 event_ready_len equ $ - event_ready
 event_resumed: db 'RESUMED'
 event_resumed_len equ $ - event_resumed
+event_guild_create: db 'GUILD_CREATE'
+event_guild_create_len equ $ - event_guild_create
 event_message_create: db 'MESSAGE_CREATE'
 event_message_create_len equ $ - event_message_create
 identify_prefix: db '{"op":2,"d":{"token":"'

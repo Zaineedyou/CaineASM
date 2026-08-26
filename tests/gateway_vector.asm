@@ -10,6 +10,8 @@ global secure_gateway_send_text
 global secure_gateway_recv_text
 global secure_gateway_close
 global dispatch_message_create
+global guild_auth_reset
+global guild_auth_cache_guild_create
 global discord_token_ptr
 global discord_token_len
 
@@ -102,8 +104,20 @@ _start:
     cmp qword [send_calls], 4
     jne .fail
 
-    ; MESSAGE_CREATE is dispatched only after its Gateway type is recognized.
+    ; GUILD_CREATE reaches only the authorization cache and does not dispatch a message.
     mov dword [failure_stage], 6
+    lea rdi, [guild_create_frame]
+    mov esi, guild_create_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    cmp qword [auth_cache_calls], 1
+    jne .fail
+    cmp qword [dispatch_calls], 0
+    jne .fail
+
+    ; MESSAGE_CREATE is dispatched only after its Gateway type is recognized.
+    mov dword [failure_stage], 61
     lea rdi, [message_frame]
     mov esi, message_frame_len
     call gateway_process_frame
@@ -127,6 +141,29 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; Auth cache seam: reset happens once for a process-start state reset.
+guild_auth_reset:
+    inc qword [auth_reset_calls]
+    ret
+
+; Auth cache seam: complete GUILD_CREATE frame is routed separately from messages.
+guild_auth_cache_guild_create:
+    cmp rsi, guild_create_frame_len
+    jne .bad
+    lea r8, [guild_create_frame]
+    mov r9d, guild_create_frame_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [auth_cache_calls]
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
 
 ; Gateway transport seam: input is fully formed NASM JSON payload.
 secure_gateway_send_text:
@@ -210,6 +247,8 @@ message_frame: db '{"op":0,"s":43,"t":"MESSAGE_CREATE","d":{"channel_id":"123456
 message_frame_len equ $ - message_frame
 reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
+guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[]}}'
+guild_create_frame_len equ $ - guild_create_frame
 identify_payload: db '{"op":2,"d":{"token":"token-value","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"}}}'
 identify_payload_len equ $ - identify_payload
 heartbeat_payload: db '{"op":1,"d":42}'
@@ -224,4 +263,6 @@ expected_payload_ptr: dq 0
 expected_payload_len: dd 0
 send_calls: dq 0
 dispatch_calls: dq 0
+auth_reset_calls: dq 0
+auth_cache_calls: dq 0
 failure_stage: dd 0

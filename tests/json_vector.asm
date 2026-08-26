@@ -6,6 +6,7 @@ extern json_read_uint
 extern json_read_string
 extern json_value_is_true
 extern json_object_end
+extern json_array_end
 
 global _start
 
@@ -142,6 +143,20 @@ _start:
     jnz .fail
 
     mov dword [failure_stage], 8
+    ; Array scanning stops exactly at the matching bracket and ignores strings.
+    lea rdi, [array_with_bracket_string]
+    lea rsi, [array_with_bracket_string + array_with_bracket_string_len]
+    call json_array_end
+    lea rdx, [array_with_bracket_string + array_with_bracket_string_len]
+    cmp rax, rdx
+    jne .fail
+    lea rdi, [truncated_array]
+    lea rsi, [truncated_array + truncated_array_len]
+    call json_array_end
+    test rax, rax
+    jnz .fail
+
+    mov dword [failure_stage], 9
     ; A missing key is zero, never an unbounded scan result.
     lea rdi, [gateway_frame]
     mov esi, gateway_frame_len
@@ -205,6 +220,10 @@ object_with_brace_string: db '{"text":"{not an object}","nested":{"ok":true}}'
 object_with_brace_string_len equ $ - object_with_brace_string
 truncated_object: db '{"text":"open"'
 truncated_object_len equ $ - truncated_object
+array_with_bracket_string: db '["[not a nested array]",{"nested":[1,2]}]'
+array_with_bracket_string_len equ $ - array_with_bracket_string
+truncated_array: db '[1,{"open":true}'
+truncated_array_len equ $ - truncated_array
 
 section .data
 failure_stage: dd 0
