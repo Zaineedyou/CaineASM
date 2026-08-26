@@ -7,6 +7,7 @@ extern json_find_key
 extern json_read_string
 extern json_value_is_true
 extern json_object_end
+extern json_array_end
 extern command_classify
 extern discord_send_text
 extern groq_chat_once
@@ -19,6 +20,7 @@ extern state_format_afk_list
 extern state_format_leaderboard
 extern state_format_banned_words
 extern guild_auth_is_manager
+extern guild_auth_roles_have
 extern guild_word_add
 extern guild_word_remove
 extern guild_channel_disable
@@ -36,6 +38,7 @@ extern bot_prefix_len
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
 %define STATE_VIEW_REPLY_CAP 2000
+%define PERMISSION_ADMINISTRATOR 8
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -413,7 +416,8 @@ dispatch_message_create:
 .removeword:
     mov dword [policy_command_op], 2
 .word_mutation:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
 .word_skip_spaces:
@@ -501,7 +505,8 @@ dispatch_message_create:
 .disable:
     mov dword [policy_command_op], 4
 .channel_policy:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     lea rdi, [guild_id]
@@ -535,7 +540,8 @@ dispatch_message_create:
     mov esi, policy_error_response_len
     jmp .reply
 .setpersona:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -561,7 +567,8 @@ dispatch_message_create:
     mov esi, persona_usage_response_len
     jmp .reply
 .setmodel:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -592,7 +599,8 @@ dispatch_message_create:
     mov esi, model_usage_response_len
     jmp .reply
 .sethistory:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -622,7 +630,8 @@ dispatch_message_create:
     mov ecx, role_saved_response_len
     jmp .config_role
 .removeautorole:
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     lea rdi, [guild_id]
@@ -664,7 +673,8 @@ dispatch_message_create:
     mov [config_setting_len], esi
     mov [config_success_ptr], rdx
     mov [config_success_len], ecx
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -700,7 +710,8 @@ dispatch_message_create:
     mov [config_setting_len], esi
     mov [config_success_ptr], rdx
     mov [config_success_len], ecx
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -741,7 +752,8 @@ dispatch_message_create:
 .config_text:
     mov [config_setting_ptr], rdi
     mov [config_setting_len], esi
-    call dispatch_owner_authorized
+    mov r8, PERMISSION_ADMINISTRATOR
+    call dispatch_has_permission
     test al, al
     jz .admin_denied
     call dispatch_tail_after_command
@@ -1125,6 +1137,66 @@ dispatch_owner_authorized:
     xor eax, eax
     ret
 
+; R8=requested Discord permission bitset. AL=1 for BOT_OWNER_ID, cached guild
+; owner, or a member.roles union cached from a trusted GUILD_CREATE dispatch.
+; Channel overwrite state is not yet cached, therefore a missing/invalid member
+; role array fails closed instead of granting an unverified command.
+dispatch_has_permission:
+    push rbx
+    push r14
+    mov r14, r8
+    call dispatch_owner_authorized
+    test al, al
+    jnz .yes
+    cmp dword [guild_id_len], 0
+    je .no
+    cmp dword [author_id_len], 0
+    je .no
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_member]
+    mov ecx, key_member_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .no
+    mov rdi, rbx
+    mov rsi, rax
+    sub rsi, rdi
+    lea rdx, [key_roles]
+    mov ecx, key_roles_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_array_end
+    test rax, rax
+    jz .no
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    mov rdx, rbx
+    mov rcx, rax
+    sub rcx, rbx
+    mov r8, r14
+    call guild_auth_roles_have
+    jmp .out
+.yes:
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r14
+    pop rbx
+    ret
+
 ; RDI=content, ESI=content length. EAX=command byte offset, -1 if no valid prefix.
 ; RDI=destination, EAX=value. EAX=decimal length.
 format_uint32:
@@ -1213,6 +1285,10 @@ key_guild_id: db 'guild_id'
 key_guild_id_len equ $ - key_guild_id
 key_author: db 'author'
 key_author_len equ $ - key_author
+key_member: db 'member'
+key_member_len equ $ - key_member
+key_roles: db 'roles'
+key_roles_len equ $ - key_roles
 key_id: db 'id'
 key_id_len equ $ - key_id
 key_content: db 'content'
