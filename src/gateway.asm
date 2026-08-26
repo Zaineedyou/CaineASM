@@ -23,6 +23,8 @@ extern json_value_is_true
 extern dispatch_message_create
 extern guild_auth_reset
 extern guild_auth_cache_guild_create
+extern lifecycle_member_add
+extern lifecycle_member_remove
 
 %define SYS_NANOSLEEP 35
 %define SYS_CLOCK_GETTIME 228
@@ -169,6 +171,20 @@ gateway_process_frame:
     jnz .guild_create
     lea rdi, [event_name]
     mov esi, r14d
+    lea rdx, [event_member_add]
+    mov ecx, event_member_add_len
+    call literal_equal
+    test al, al
+    jnz .member_add
+    lea rdi, [event_name]
+    mov esi, r14d
+    lea rdx, [event_member_remove]
+    mov ecx, event_member_remove_len
+    call literal_equal
+    test al, al
+    jnz .member_remove
+    lea rdi, [event_name]
+    mov esi, r14d
     lea rdx, [event_message_create]
     mov ecx, event_message_create_len
     call literal_equal
@@ -192,6 +208,16 @@ gateway_process_frame:
     call guild_auth_cache_guild_create
     ; Cache failures fail closed for role-derived authorization but do not
     ; invalidate an otherwise healthy Gateway session.
+    jmp .none
+.member_add:
+    mov rdi, r12
+    mov rsi, r13
+    call lifecycle_member_add
+    jmp .none
+.member_remove:
+    mov rdi, r12
+    mov rsi, r13
+    call lifecycle_member_remove
     jmp .none
 .message_create:
     mov rdi, r12
@@ -721,6 +747,10 @@ event_resumed: db 'RESUMED'
 event_resumed_len equ $ - event_resumed
 event_guild_create: db 'GUILD_CREATE'
 event_guild_create_len equ $ - event_guild_create
+event_member_add: db 'GUILD_MEMBER_ADD'
+event_member_add_len equ $ - event_member_add
+event_member_remove: db 'GUILD_MEMBER_REMOVE'
+event_member_remove_len equ $ - event_member_remove
 event_message_create: db 'MESSAGE_CREATE'
 event_message_create_len equ $ - event_message_create
 identify_prefix: db '{"op":2,"d":{"token":"'

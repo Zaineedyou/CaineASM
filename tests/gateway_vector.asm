@@ -12,6 +12,8 @@ global secure_gateway_close
 global dispatch_message_create
 global guild_auth_reset
 global guild_auth_cache_guild_create
+global lifecycle_member_add
+global lifecycle_member_remove
 global discord_token_ptr
 global discord_token_len
 
@@ -126,6 +128,24 @@ _start:
     cmp qword [dispatch_calls], 1
     jne .fail
 
+    ; Member lifecycle events are routed separately from message commands.
+    mov dword [failure_stage], 62
+    lea rdi, [member_add_frame]
+    mov esi, member_add_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    cmp qword [member_add_calls], 1
+    jne .fail
+    mov dword [failure_stage], 63
+    lea rdi, [member_remove_frame]
+    mov esi, member_remove_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    cmp qword [member_remove_calls], 1
+    jne .fail
+
     ; Opcode 7 requests a reconnect without parsing unrelated state.
     mov dword [failure_stage], 7
     lea rdi, [reconnect_frame]
@@ -159,6 +179,40 @@ guild_auth_cache_guild_create:
     test al, al
     jz .bad
     inc qword [auth_cache_calls]
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+lifecycle_member_add:
+    cmp rsi, member_add_frame_len
+    jne .bad
+    lea r8, [member_add_frame]
+    mov r9d, member_add_frame_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [member_add_calls]
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+lifecycle_member_remove:
+    cmp rsi, member_remove_frame_len
+    jne .bad
+    lea r8, [member_remove_frame]
+    mov r9d, member_remove_frame_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [member_remove_calls]
     xor eax, eax
     ret
 .bad:
@@ -249,6 +303,10 @@ reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
 guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[]}}'
 guild_create_frame_len equ $ - guild_create_frame
+member_add_frame: db '{"op":0,"s":45,"t":"GUILD_MEMBER_ADD","d":{"guild_id":"1001","user":{"id":"2001","username":"Alice"}}}'
+member_add_frame_len equ $ - member_add_frame
+member_remove_frame: db '{"op":0,"s":46,"t":"GUILD_MEMBER_REMOVE","d":{"guild_id":"1001","user":{"id":"2001","username":"Alice"}}}'
+member_remove_frame_len equ $ - member_remove_frame
 identify_payload: db '{"op":2,"d":{"token":"token-value","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"}}}'
 identify_payload_len equ $ - identify_payload
 heartbeat_payload: db '{"op":1,"d":42}'
@@ -265,4 +323,6 @@ send_calls: dq 0
 dispatch_calls: dq 0
 auth_reset_calls: dq 0
 auth_cache_calls: dq 0
+member_add_calls: dq 0
+member_remove_calls: dq 0
 failure_stage: dd 0
