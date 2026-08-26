@@ -67,6 +67,8 @@ extern discord_get_json
 %define REPLY_REFERENCE_ID_CAP 64
 %define REPLY_REFERENCE_URL_CAP 512
 %define REPLY_REFERENCE_RESPONSE_CAP 4096
+%define TARGET_MEMBER_URL_CAP 512
+%define TARGET_MEMBER_RESPONSE_CAP 4096
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 %define PERMISSION_BAN_MEMBERS 4
@@ -1311,6 +1313,99 @@ dispatch_message_create:
     pop rbx
     ret
 
+; RDI=target member snowflake, ESI=len. RDX=roles array pointer and ECX=len
+; only when one bounded Discord member GET succeeds and yields a complete roles
+; array. RAX=-1 otherwise; callers must not perform destructive REST on failure.
+dispatch_fetch_target_member_roles:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, AUTHOR_ID_CAP - 1
+    ja .bad
+    cmp dword [guild_id_len], 0
+    jle .bad
+    mov rdi, r12
+    mov esi, r13d
+    call dispatch_is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, target_member_url_prefix_len + target_member_url_middle_len
+    add eax, [guild_id_len]
+    add eax, r13d
+    cmp eax, TARGET_MEMBER_URL_CAP - 1
+    ja .bad
+    mov [target_member_url_len], eax
+    lea rdi, [target_member_url]
+    lea rsi, [target_member_url_prefix]
+    mov edx, target_member_url_prefix_len
+    call copy_bytes
+    lea rdi, [target_member_url + target_member_url_prefix_len]
+    lea rsi, [guild_id]
+    mov edx, [guild_id_len]
+    call copy_bytes
+    lea rdi, [target_member_url + target_member_url_prefix_len]
+    add rdi, [guild_id_len]
+    lea rsi, [target_member_url_middle]
+    mov edx, target_member_url_middle_len
+    call copy_bytes
+    lea rdi, [target_member_url + target_member_url_prefix_len]
+    add rdi, [guild_id_len]
+    add rdi, target_member_url_middle_len
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    mov eax, [target_member_url_len]
+    mov byte [target_member_url + rax], 0
+    lea rdi, [target_member_url]
+    mov esi, [target_member_url_len]
+    lea rdx, [target_member_response]
+    mov ecx, TARGET_MEMBER_RESPONSE_CAP
+    call discord_get_json
+    test rax, rax
+    jle .bad
+    mov [target_member_response_len], eax
+    lea rdi, [target_member_response]
+    mov esi, eax
+    lea rdx, [key_roles]
+    mov ecx, key_roles_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    cmp byte [rax], '['
+    jne .bad
+    mov r14, rax
+    mov rdi, r14
+    lea rsi, [target_member_response]
+    add rsi, [target_member_response_len]
+    call json_array_end
+    test rax, rax
+    jz .bad
+    mov r15, rax
+    mov rdx, r14
+    mov rcx, r15
+    sub rcx, r14
+    xor eax, eax
+    jmp .out
+.bad:
+    mov rax, -1
+    xor edx, edx
+    xor ecx, ecx
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; RDI=full MESSAGE_CREATE JSON, RSI=len. AL=1 only when a bounded
 ; message_reference points to a message authored by the READY-cached bot ID.
 ; Exactly one authenticated Discord GET is issued per valid reference candidate;
@@ -2333,6 +2428,10 @@ reply_reference_url_prefix: db 'https://discord.com/api/v10/channels/'
 reply_reference_url_prefix_len equ $ - reply_reference_url_prefix
 reply_reference_url_middle: db '/messages/'
 reply_reference_url_middle_len equ $ - reply_reference_url_middle
+target_member_url_prefix: db 'https://discord.com/api/v10/guilds/'
+target_member_url_prefix_len equ $ - target_member_url_prefix
+target_member_url_middle: db '/members/'
+target_member_url_middle_len equ $ - target_member_url_middle
 history_server_prefix: db 'server-'
 history_server_prefix_len equ $ - history_server_prefix
 history_dm_prefix: db 'dm-'
@@ -2405,3 +2504,7 @@ reply_reference_url_len: resd 1
 reply_reference_response: resb REPLY_REFERENCE_RESPONSE_CAP
 reply_reference_response_len: resd 1
 reply_reference_author_id: resb AUTHOR_ID_CAP
+target_member_url: resb TARGET_MEMBER_URL_CAP
+target_member_url_len: resd 1
+target_member_response: resb TARGET_MEMBER_RESPONSE_CAP
+target_member_response_len: resd 1
