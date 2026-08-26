@@ -173,11 +173,17 @@ long secure_https_get(const char *url, const char *authorization,
     struct response_buffer output = {response, response_capacity, 0};
     CURLcode code;
     long status = 0;
-    if (!easy || !authorization || !response || response_capacity < 2) return -EINVAL;
+    if (!easy || !response || response_capacity < 2) return -EINVAL;
 
-    headers = curl_slist_append(headers, authorization);
+    if (authorization && authorization[0] != '\0') {
+        headers = curl_slist_append(headers, authorization);
+        if (!headers) {
+            curl_easy_cleanup(easy);
+            return -ENOMEM;
+        }
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+    }
     curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(easy, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 2L);
