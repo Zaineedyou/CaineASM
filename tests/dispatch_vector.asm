@@ -6,6 +6,7 @@ extern dispatch_message_create
 global _start
 global discord_send_text
 global groq_chat_once
+global groq_select_guild
 global afk_set
 global xp_increment
 global xp_get
@@ -19,6 +20,7 @@ global guild_word_remove
 global guild_channel_disable
 global guild_channel_enable
 global guild_channel_is_disabled
+global guild_config_set
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -95,6 +97,8 @@ _start:
     cmp qword [send_calls], 3
     jne .fail
     cmp qword [groq_calls], 1
+    jne .fail
+    cmp qword [groq_select_calls], 1
     jne .fail
     cmp qword [xp_calls], 0
     jne .fail
@@ -216,8 +220,68 @@ _start:
     cmp qword [channel_enable_calls], 1
     jne .fail
 
-    ; Unknown command gets the bounded default help response.
     mov dword [failure_stage], 14
+    lea rax, [persona_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], persona_saved_response_len
+    lea rax, [setting_persona]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_persona_len
+    lea rax, [persona_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], persona_value_len
+    lea rdi, [persona_event]
+    mov esi, persona_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 12
+    jne .fail
+    cmp qword [config_set_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 15
+    lea rax, [history_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], history_saved_response_len
+    lea rax, [setting_history]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_history_len
+    lea rax, [history_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], history_value_len
+    lea rdi, [history_event]
+    mov esi, history_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 13
+    jne .fail
+    cmp qword [config_set_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 16
+    lea rax, [model_saved_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], model_saved_response_len
+    lea rax, [setting_model]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], setting_model_len
+    lea rax, [model_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], model_value_len
+    lea rdi, [model_event]
+    mov esi, model_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 14
+    jne .fail
+    cmp qword [config_set_calls], 3
+    jne .fail
+
+    ; Unknown command gets the bounded default help response.
+    mov dword [failure_stage], 17
     lea rax, [unknown_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], unknown_response_len
@@ -226,7 +290,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 12
+    cmp qword [send_calls], 15
     jne .fail
 
     mov eax, SYS_EXIT
@@ -236,6 +300,12 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; RDI=guild, ESI=guild len. The fixture only records that summarize selects context.
+groq_select_guild:
+    inc qword [groq_select_calls]
+    xor eax, eax
+    ret
 
 ; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
 groq_chat_once:
@@ -295,6 +365,47 @@ guild_channel_enable:
     ret
 guild_channel_is_disabled:
     xor eax, eax
+    ret
+
+; RDI=guild, ESI=guild len, RDX=setting, ECX=setting len, R8=value, R9D=value len.
+guild_config_set:
+    push rbx
+    push r12
+    mov rbx, r8
+    mov r12, rdx
+    mov r11d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r11d, [expected_config_setting_len]
+    jne .bad
+    mov rdi, r12
+    mov rsi, [expected_config_setting_ptr]
+    mov edx, r11d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r9d, [expected_config_value_len]
+    jne .bad
+    mov rdi, rbx
+    mov rsi, [expected_config_value_ptr]
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [config_set_calls]
+    xor eax, eax
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop r12
+    pop rbx
     ret
 
 ; Formatter seams verify dispatch's guild and exact Discord-capacity contract.
@@ -535,6 +646,12 @@ disable_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","chann
 disable_event_len equ $ - disable_event
 enable_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^enable","author":{"id":"user-2","bot":false}}}'
 enable_event_len equ $ - enable_event
+persona_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setpersona Caine santai","author":{"id":"user-2","bot":false}}}'
+persona_event_len equ $ - persona_event
+history_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^sethistory 30","author":{"id":"user-2","bot":false}}}'
+history_event_len equ $ - history_event
+model_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^setmodel GPT120B","author":{"id":"user-2","bot":false}}}'
+model_event_len equ $ - model_event
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -555,6 +672,24 @@ channel_enabled_response: db 'Bot enabled in this channel.'
 channel_enabled_response_len equ $ - channel_enabled_response
 channel_disabled_response: db 'Bot disabled in this channel.'
 channel_disabled_response_len equ $ - channel_disabled_response
+persona_saved_response: db 'Guild persona saved.'
+persona_saved_response_len equ $ - persona_saved_response
+history_saved_response: db 'Guild history limit saved.'
+history_saved_response_len equ $ - history_saved_response
+setting_persona: db 'persona'
+setting_persona_len equ $ - setting_persona
+setting_history: db 'history'
+setting_history_len equ $ - setting_history
+persona_value: db 'Caine santai'
+persona_value_len equ $ - persona_value
+history_value: db '30'
+history_value_len equ $ - history_value
+model_value: db 'openai/gpt-oss-120b'
+model_value_len equ $ - model_value
+model_saved_response: db 'Guild model saved.'
+model_saved_response_len equ $ - model_saved_response
+setting_model: db 'model'
+setting_model_len equ $ - setting_model
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
 
@@ -563,12 +698,18 @@ bot_prefix_ptr: dq 0
 bot_prefix_len: dd 0
 expected_text_ptr: dq 0
 expected_text_len: dd 0
+expected_config_setting_ptr: dq 0
+expected_config_setting_len: dd 0
+expected_config_value_ptr: dq 0
+expected_config_value_len: dd 0
 send_calls: dq 0
 groq_calls: dq 0
+groq_select_calls: dq 0
 afk_calls: dq 0
 xp_calls: dq 0
 word_add_calls: dq 0
 word_remove_calls: dq 0
 channel_disable_calls: dq 0
 channel_enable_calls: dq 0
+config_set_calls: dq 0
 failure_stage: dd 0

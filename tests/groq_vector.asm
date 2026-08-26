@@ -2,11 +2,13 @@ BITS 64
 DEFAULT REL
 
 extern groq_chat_once
+extern groq_select_guild
 
 global _start
 global secure_https_post_json
 global groq_key_ptr
 global groq_key_len
+global guild_config_get
 
 %define SYS_EXIT 60
 
@@ -39,12 +41,31 @@ _start:
     cmp qword [mock_calls], 1
     jne .fail
 
-    ; Non-retriable HTTP errors return failure instead of accepting error JSON.
+    ; Guild-selected model and persona are escaped and used in the next request.
     mov dword [failure_stage], 2
-    mov qword [mock_status], 400
-    lea rax, [expected_plain_body]
+    mov dword [config_mode], 1
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    call groq_select_guild
+    lea rax, [expected_custom_body]
     mov [mock_body_ptr], rax
-    mov dword [mock_body_len], expected_plain_body_len
+    mov dword [mock_body_len], expected_custom_body_len
+    lea rdi, [plain_prompt]
+    mov esi, plain_prompt_len
+    lea rdx, [reply]
+    mov ecx, 64
+    call groq_chat_once
+    cmp eax, expected_reply_len
+    jne .fail
+    cmp qword [mock_calls], 2
+    jne .fail
+
+    ; Non-retriable HTTP errors return failure instead of accepting error JSON.
+    mov dword [failure_stage], 3
+    mov qword [mock_status], 400
+    lea rax, [expected_custom_body]
+    mov [mock_body_ptr], rax
+    mov dword [mock_body_len], expected_custom_body_len
     lea rdi, [plain_prompt]
     mov esi, plain_prompt_len
     lea rdx, [reply]
@@ -52,11 +73,11 @@ _start:
     call groq_chat_once
     cmp eax, -1
     jne .fail
-    cmp qword [mock_calls], 2
+    cmp qword [mock_calls], 3
     jne .fail
 
     ; Header injection bytes in an API key are rejected before touching transport.
-    mov dword [failure_stage], 3
+    mov dword [failure_stage], 4
     lea rax, [bad_key]
     mov [groq_key_ptr], rax
     mov dword [groq_key_len], bad_key_len
@@ -67,7 +88,7 @@ _start:
     call groq_chat_once
     cmp eax, -1
     jne .fail
-    cmp qword [mock_calls], 2
+    cmp qword [mock_calls], 3
     jne .fail
 
     mov eax, SYS_EXIT
@@ -77,6 +98,26 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; Config seam returns optional per-guild model/persona only after selection test enables it.
+guild_config_get:
+    cmp dword [config_mode], 1
+    jne .missing
+    cmp byte [rdx], 'm'
+    jne .persona
+    lea rax, [custom_model]
+    mov edx, custom_model_len
+    ret
+.persona:
+    cmp byte [rdx], 'p'
+    jne .missing
+    lea rax, [custom_persona]
+    mov edx, custom_persona_len
+    ret
+.missing:
+    xor eax, eax
+    xor edx, edx
+    ret
 
 ; RDI=url, RSI=authorization, RDX=body, RCX=body len,
 ; R8=response, R9=capacity, [RSP+8]=long *status_out.
@@ -181,6 +222,12 @@ prompt: db 'Say ', '"', 'hi', '"', 10, 0x5c, ' now'
 prompt_len equ $ - prompt
 plain_prompt: db 'hello'
 plain_prompt_len equ $ - plain_prompt
+guild_id: db 'guild-1'
+guild_id_len equ $ - guild_id
+custom_model: db 'openai/gpt-oss-120b'
+custom_model_len equ $ - custom_model
+custom_persona: db 'Custom "persona"'
+custom_persona_len equ $ - custom_persona
 groq_url: db 'https://api.groq.com/openai/v1/chat/completions'
 groq_url_len equ $ - groq_url
 expected_authorization: db 'Authorization: Bearer gsk_test_value'
@@ -189,6 +236,8 @@ expected_body: db '{"model":"llama-3.3-70b-versatile","messages":[{"role":"syste
 expected_body_len equ $ - expected_body
 expected_plain_body: db '{"model":"llama-3.3-70b-versatile","messages":[{"role":"system","content":"You are CaineASM, a concise Discord assistant."},{"role":"user","content":"hello"}],"max_completion_tokens":512,"temperature":0.7}'
 expected_plain_body_len equ $ - expected_plain_body
+expected_custom_body: db '{"model":"openai/gpt-oss-120b","messages":[{"role":"system","content":"Custom ', 0x5c, '"', 'persona', 0x5c, '"', '"},{"role":"user","content":"hello"}],"max_completion_tokens":512,"temperature":0.7}'
+expected_custom_body_len equ $ - expected_custom_body
 response_json: db '{"choices":[{"message":{"content":"Answer', 0x5c, 'nOK"}}]}'
 response_json_len equ $ - response_json
 expected_reply: db 'Answer', 10, 'OK'
@@ -202,6 +251,7 @@ mock_calls: dq 0
 failure_stage: dd 0
 mock_body_ptr: dq 0
 mock_body_len: dd 0
+config_mode: dd 0
 
 section .bss
 reply: resb 64

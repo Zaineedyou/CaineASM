@@ -10,6 +10,7 @@ extern json_object_end
 extern command_classify
 extern discord_send_text
 extern groq_chat_once
+extern groq_select_guild
 extern afk_set
 extern afk_clear
 extern xp_increment
@@ -23,6 +24,7 @@ extern guild_word_remove
 extern guild_channel_disable
 extern guild_channel_enable
 extern guild_channel_is_disabled
+extern guild_config_set
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -47,6 +49,9 @@ extern bot_prefix_len
 %define CMD_WORDS 19
 %define CMD_ENABLE 20
 %define CMD_DISABLE 21
+%define CMD_SETPERSONA 22
+%define CMD_SETMODEL 23
+%define CMD_SETHISTORY 24
 
 ; RDI=Gateway MESSAGE_CREATE JSON, RSI=length.
 ; EAX=0 for ignored/handled message, -1 only when the outbound REST operation fails.
@@ -268,6 +273,12 @@ dispatch_message_create:
     je .enable
     cmp eax, CMD_DISABLE
     je .disable
+    cmp eax, CMD_SETPERSONA
+    je .setpersona
+    cmp eax, CMD_SETMODEL
+    je .setmodel
+    cmp eax, CMD_SETHISTORY
+    je .sethistory
     test eax, eax
     jz .unknown
     lea rdi, [registered_notice]
@@ -498,6 +509,87 @@ dispatch_message_create:
     lea rdi, [policy_error_response]
     mov esi, policy_error_response_len
     jmp .reply
+.setpersona:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .persona_usage
+    lea rdi, [setting_persona]
+    mov edx, esi
+    mov r8, rdi
+    mov r9d, edx
+    lea rdi, [setting_persona]
+    mov esi, setting_persona_len
+    ; tail pointer/length returned in RDI/ESI are preserved in temporary state.
+    mov rdx, [dispatch_tail_ptr]
+    mov ecx, [dispatch_tail_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    lea rdi, [persona_saved_response]
+    mov esi, persona_saved_response_len
+    jmp .reply
+.persona_usage:
+    lea rdi, [persona_usage_response]
+    mov esi, persona_usage_response_len
+    jmp .reply
+.setmodel:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .model_usage
+    call dispatch_copy_first_lower
+    test eax, eax
+    jle .model_usage
+    lea rdi, [argument_buffer]
+    mov esi, eax
+    call dispatch_model_alias
+    test rax, rax
+    jz .model_usage
+    mov [dispatch_model_ptr], rax
+    mov [dispatch_model_len], edx
+    lea rdi, [setting_model]
+    mov esi, setting_model_len
+    mov rdx, [dispatch_model_ptr]
+    mov ecx, [dispatch_model_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    lea rdi, [model_saved_response]
+    mov esi, model_saved_response_len
+    jmp .reply
+.model_usage:
+    lea rdi, [model_usage_response]
+    mov esi, model_usage_response_len
+    jmp .reply
+.sethistory:
+    call dispatch_owner_authorized
+    test al, al
+    jz .admin_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .history_usage
+    mov rdi, rdi
+    call dispatch_parse_history_limit
+    jc .history_usage
+    lea rdi, [setting_history]
+    mov esi, setting_history_len
+    mov rdx, [dispatch_tail_ptr]
+    mov ecx, [dispatch_tail_len]
+    call dispatch_store_config
+    test eax, eax
+    jnz .policy_error
+    lea rdi, [history_saved_response]
+    mov esi, history_saved_response_len
+    jmp .reply
+.history_usage:
+    lea rdi, [history_usage_response]
+    mov esi, history_usage_response_len
+    jmp .reply
 .rank_unavailable:
     lea rdi, [rank_unavailable_response]
     mov esi, rank_unavailable_response_len
@@ -540,6 +632,9 @@ dispatch_message_create:
     inc ebx
     jmp .skip_prompt_spaces
 .ask_groq:
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call groq_select_guild
     lea rdi, [message_content + rbx]
     mov esi, r15d
     sub esi, ebx
@@ -577,6 +672,205 @@ dispatch_message_create:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; EAX=0 on stored config; -1 on invalid or persistence failure.
+; RDI=setting, ESI=setting len, RDX=value, ECX=value len.
+dispatch_store_config:
+    push r12
+    push r13
+    push r14
+    push r15
+    push rbx
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    mov rdx, r12
+    mov ecx, r13d
+    mov r8, r14
+    mov r9d, r15d
+    call guild_config_set
+    pop rbx
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; Skip command whitespace. RDI=tail pointer, ESI=tail length.
+dispatch_tail_after_command:
+    mov eax, ebx
+.skip:
+    cmp eax, r15d
+    jae .empty
+    mov dl, [message_content + rax]
+    cmp dl, ' '
+    je .advance
+    cmp dl, 9
+    je .advance
+    jmp .ready
+.advance:
+    inc eax
+    jmp .skip
+.ready:
+    lea rdi, [message_content + rax]
+    mov esi, r15d
+    sub esi, eax
+    mov [dispatch_tail_ptr], rdi
+    mov [dispatch_tail_len], esi
+    ret
+.empty:
+    xor edi, edi
+    xor esi, esi
+    mov qword [dispatch_tail_ptr], 0
+    mov dword [dispatch_tail_len], 0
+    ret
+
+; RDI=tail, ESI=tail length. EAX=lower-cased first token length, or -1.
+dispatch_copy_first_lower:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .done
+    cmp ecx, COMMAND_CAP - 1
+    jae .bad
+    mov al, [rdi + rcx]
+    cmp al, ' '
+    je .done
+    cmp al, 9
+    je .done
+    cmp al, 10
+    je .done
+    cmp al, 13
+    je .done
+    cmp al, 'A'
+    jb .store
+    cmp al, 'Z'
+    ja .store
+    add al, 'a' - 'A'
+.store:
+    mov [argument_buffer + rcx], al
+    inc ecx
+    jmp .loop
+.done:
+    test ecx, ecx
+    jz .bad
+    mov eax, ecx
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+; RDI=normalized alias, ESI=len. RAX=model ID pointer; EDX=len; zero/zero invalid.
+dispatch_model_alias:
+    mov r8, rdi
+    mov r9d, esi
+    lea r10, [model_alias_table]
+.next:
+    mov ecx, [r10]
+    test ecx, ecx
+    jz .bad
+    cmp ecx, r9d
+    jne .advance
+    mov rdi, r8
+    mov rsi, [r10 + 8]
+    mov edx, ecx
+    call dispatch_bytes_equal
+    test al, al
+    jnz .found
+.advance:
+    add r10, 32
+    jmp .next
+.found:
+    mov rax, [r10 + 16]
+    mov edx, [r10 + 24]
+    ret
+.bad:
+    xor eax, eax
+    xor edx, edx
+    ret
+
+; RDI/RSI, EDX length. AL=1 iff exact bytes match.
+dispatch_bytes_equal:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, [rsi + rcx]
+    jne .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=decimal tail, ESI=tail len. CF=0 only for one ASCII decimal token 5..100.
+dispatch_parse_history_limit:
+    test esi, esi
+    jle .bad
+    xor eax, eax
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .done
+    movzx edx, byte [rdi + rcx]
+    cmp dl, '0'
+    jb .space_or_bad
+    cmp dl, '9'
+    ja .space_or_bad
+    imul eax, eax, 10
+    add eax, edx
+    sub eax, '0'
+    cmp eax, 100
+    ja .bad
+    inc ecx
+    jmp .loop
+.space_or_bad:
+    cmp dl, ' '
+    je .space_tail
+    cmp dl, 9
+    je .space_tail
+    cmp dl, 10
+    je .space_tail
+    cmp dl, 13
+    je .space_tail
+    jmp .bad
+.space_tail:
+    inc ecx
+.tail_loop:
+    cmp ecx, esi
+    jae .done
+    mov dl, [rdi + rcx]
+    cmp dl, ' '
+    je .tail_advance
+    cmp dl, 9
+    je .tail_advance
+    cmp dl, 10
+    je .tail_advance
+    cmp dl, 13
+    je .tail_advance
+    jmp .bad
+.tail_advance:
+    inc ecx
+    jmp .tail_loop
+.done:
+    cmp eax, 5
+    jb .bad
+    clc
+    ret
+.bad:
+    stc
     ret
 
 ; AL=1 only for BOT_OWNER_ID or a cached server owner in a guild context. This
@@ -712,6 +1006,57 @@ admin_denied_response: db 'Admin verification unavailable or denied.'
 admin_denied_response_len equ $ - admin_denied_response
 policy_error_response: db 'Policy state could not be saved.'
 policy_error_response_len equ $ - policy_error_response
+persona_usage_response: db 'Usage: setpersona <text>.'
+persona_usage_response_len equ $ - persona_usage_response
+persona_saved_response: db 'Guild persona saved.'
+persona_saved_response_len equ $ - persona_saved_response
+history_usage_response: db 'Usage: sethistory <number 5-100>.'
+history_usage_response_len equ $ - history_usage_response
+history_saved_response: db 'Guild history limit saved.'
+history_saved_response_len equ $ - history_saved_response
+setting_persona: db 'persona'
+setting_persona_len equ $ - setting_persona
+setting_history: db 'history'
+setting_history_len equ $ - setting_history
+setting_model: db 'model'
+setting_model_len equ $ - setting_model
+model_usage_response: db 'Usage: setmodel llama70b|gpt120b|gpt20b|qwen32b.'
+model_usage_response_len equ $ - model_usage_response
+model_saved_response: db 'Guild model saved.'
+model_saved_response_len equ $ - model_saved_response
+model_alias_llama: db 'llama70b'
+model_alias_llama_len equ $ - model_alias_llama
+model_id_llama: db 'llama-3.3-70b-versatile'
+model_id_llama_len equ $ - model_id_llama
+model_alias_gpt120: db 'gpt120b'
+model_alias_gpt120_len equ $ - model_alias_gpt120
+model_id_gpt120: db 'openai/gpt-oss-120b'
+model_id_gpt120_len equ $ - model_id_gpt120
+model_alias_gpt20: db 'gpt20b'
+model_alias_gpt20_len equ $ - model_alias_gpt20
+model_id_gpt20: db 'openai/gpt-oss-20b'
+model_id_gpt20_len equ $ - model_id_gpt20
+model_alias_qwen: db 'qwen32b'
+model_alias_qwen_len equ $ - model_alias_qwen
+model_id_qwen: db 'qwen/qwen3-32b'
+model_id_qwen_len equ $ - model_id_qwen
+align 8
+model_alias_table:
+    dd model_alias_llama_len, 0
+    dq model_alias_llama, model_id_llama
+    dd model_id_llama_len, 0
+    dd model_alias_gpt120_len, 0
+    dq model_alias_gpt120, model_id_gpt120
+    dd model_id_gpt120_len, 0
+    dd model_alias_gpt20_len, 0
+    dq model_alias_gpt20, model_id_gpt20
+    dd model_id_gpt20_len, 0
+    dd model_alias_qwen_len, 0
+    dq model_alias_qwen, model_id_qwen
+    dd model_id_qwen_len, 0
+    dd 0, 0
+    dq 0, 0
+    dd 0, 0
 unknown_response: db 'Unknown command. Use !help.'
 unknown_response_len equ $ - unknown_response
 summarize_usage_response: db 'Usage: !summarize <text>'
@@ -744,6 +1089,10 @@ guild_id_len: resd 1
 author_id_len: resd 1
 rank_score: resd 1
 policy_command_op: resd 1
+dispatch_tail_ptr: resq 1
+dispatch_tail_len: resd 1
+dispatch_model_ptr: resq 1
+dispatch_model_len: resd 1
 rank_response: resb 32
 rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP
