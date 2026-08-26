@@ -5,6 +5,7 @@ extern discord_send_text
 extern discord_delete_message
 extern discord_get_json
 extern discord_get_channel_messages
+extern discord_bulk_delete_messages
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -40,6 +41,12 @@ _start:
     mov dword [discord_token_len], token_len
     mov qword [mock_status], 201
     mov qword [mock_calls], 0
+    lea rax, [expected_url]
+    mov [expected_post_url_ptr], rax
+    mov dword [expected_post_url_len], expected_url_len
+    lea rax, [expected_body]
+    mov [expected_post_body_ptr], rax
+    mov dword [expected_post_body_len], expected_body_len
     mov dword [mock_failure_reason], 0
     lea rax, [expected_unban_url]
     mov [expected_put_url_ptr], rax
@@ -573,6 +580,68 @@ _start:
     mov [expected_get_url_ptr], rax
     mov dword [expected_get_url_len_dynamic], expected_get_url_len
 
+    ; Batch delete accepts only a validated fixed-slot table and serializes the
+    ; exact Discord route/body entirely on the NASM side.
+    mov dword [failure_stage], 85
+    lea rax, [expected_bulk_delete_url]
+    mov [expected_post_url_ptr], rax
+    mov dword [expected_post_url_len], expected_bulk_delete_url_len
+    lea rax, [expected_bulk_delete_body]
+    mov [expected_post_body_ptr], rax
+    mov dword [expected_post_body_len], expected_bulk_delete_body_len
+    mov qword [mock_status], 204
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [bulk_id_slots]
+    mov ecx, 2
+    call discord_bulk_delete_messages
+    test eax, eax
+    jnz .fail
+    cmp qword [mock_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 86
+    mov qword [mock_status], 429
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [bulk_id_slots]
+    mov ecx, 2
+    call discord_bulk_delete_messages
+    cmp eax, -1
+    jne .fail
+    cmp qword [mock_calls], 4
+    jne .fail
+
+    mov dword [failure_stage], 87
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [bulk_duplicate_slots]
+    mov ecx, 2
+    call discord_bulk_delete_messages
+    cmp eax, -1
+    jne .fail
+    cmp qword [mock_calls], 4
+    jne .fail
+
+    mov dword [failure_stage], 88
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [bulk_invalid_slots]
+    mov ecx, 2
+    call discord_bulk_delete_messages
+    cmp eax, -1
+    jne .fail
+    cmp qword [mock_calls], 4
+    jne .fail
+
+    lea rax, [expected_url]
+    mov [expected_post_url_ptr], rax
+    mov dword [expected_post_url_len], expected_url_len
+    lea rax, [expected_body]
+    mov [expected_post_body_ptr], rax
+    mov dword [expected_post_body_len], expected_body_len
+    mov qword [mock_status], 201
+
     mov dword [failure_stage], 10
     mov qword [put_status], 204
     lea rdi, [channel_id]
@@ -660,8 +729,8 @@ _start:
 secure_https_post_json:
     push rbx
     mov rbx, rdx
-    lea r10, [expected_url]
-    mov r11d, expected_url_len
+    mov r10, [expected_post_url_ptr]
+    mov r11d, [expected_post_url_len]
     call equal_cstring
     test al, al
     jnz .url_ok
@@ -677,14 +746,14 @@ secure_https_post_json:
     mov dword [mock_failure_reason], 22
     jmp .transport_fail
 .authorization_ok:
-    cmp ecx, expected_body_len
+    cmp ecx, [expected_post_body_len]
     je .length_ok
     mov dword [mock_failure_reason], 23
     jmp .transport_fail
 .length_ok:
     mov rdi, rbx
-    lea rsi, [expected_body]
-    mov edx, expected_body_len
+    mov rsi, [expected_post_body_ptr]
+    mov edx, [expected_post_body_len]
     call equal_bytes
     test al, al
     jnz .body_ok
@@ -1101,6 +1170,10 @@ escaped_text: db 'say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5c, ' L', 0x5c
 escaped_text_len equ $ - escaped_text
 expected_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages'
 expected_url_len equ $ - expected_url
+expected_bulk_delete_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/bulk-delete'
+expected_bulk_delete_url_len equ $ - expected_bulk_delete_url
+expected_bulk_delete_body: db '{"messages":["111111111111111111","222222222222222222"]}'
+expected_bulk_delete_body_len equ $ - expected_bulk_delete_body
 message_id: db '987654321098765432'
 message_id_len equ $ - message_id
 role_id: db '111222333444555666'
@@ -1175,12 +1248,28 @@ expected_body: db '{"content":"say ', 0x5c, '"', 'hi', 0x5c, '"', ' ', 0x5c, 0x5
 expected_body_len equ $ - expected_body
 oversized_text: times 2001 db 'x'
 oversized_text_len equ $ - oversized_text
+bulk_id_slots: db '111111111111111111', 0
+times 45 db 0
+               db '222222222222222222', 0
+times 45 db 0
+bulk_duplicate_slots: db '111111111111111111', 0
+times 45 db 0
+                    db '111111111111111111', 0
+times 45 db 0
+bulk_invalid_slots: db '111111111111111111', 0
+times 45 db 0
+                  db '22x222222222222222', 0
+times 45 db 0
 
 section .data
 discord_token_ptr: dq 0
 discord_token_len: dd 0
 mock_status: dq 0
 mock_calls: dq 0
+expected_post_url_ptr: dq 0
+expected_post_url_len: dd 0
+expected_post_body_ptr: dq 0
+expected_post_body_len: dd 0
 delete_status: dq 0
 expected_delete_ptr: dq 0
 expected_delete_len: dd 0
