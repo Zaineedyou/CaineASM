@@ -39,6 +39,8 @@ global warnings_get
 global warnings_clear
 global bot_prefix_ptr
 global bot_prefix_len
+global gateway_bot_user_id
+global gateway_bot_user_id_len
 
 %define SYS_EXIT 60
 
@@ -1079,6 +1081,8 @@ report_log_channel_value_len equ $ - report_log_channel_value
 section .data
 bot_prefix_ptr: dq 0
 bot_prefix_len: dd 0
+gateway_bot_user_id: times 64 db 0
+gateway_bot_user_id_len: dd 0
 expected_text_ptr: dq 0
 expected_text_len: dd 0
 expected_config_setting_ptr: dq 0

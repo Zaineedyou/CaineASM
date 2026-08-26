@@ -44,6 +44,8 @@ extern warnings_get
 extern warnings_clear
 extern bot_prefix_ptr
 extern bot_prefix_len
+extern gateway_bot_user_id
+extern gateway_bot_user_id_len
 
 %define MESSAGE_CONTENT_CAP 2048
 %define CHANNEL_ID_CAP 64
@@ -269,8 +271,14 @@ dispatch_message_create:
     mov esi, r15d
     call command_offset_after_prefix
     test eax, eax
+    jns .trigger_ready
+    lea rdi, [message_content]
+    mov esi, r15d
+    call dispatch_offset_after_bot_mention
+    test eax, eax
     js .handled
-    mov ebx, eax                     ; offset after prefix
+.trigger_ready:
+    mov ebx, eax                     ; offset after prefix or mention
     cmp ebx, r15d
     jae .handled
 
@@ -1722,8 +1730,50 @@ copy_bytes:
 .copy_done:
     ret
 
+; RDI=content, ESI=len. EAX=offset after <@bot-id> or <@!bot-id>, else -1.
+dispatch_offset_after_bot_mention:
+    test rdi, rdi
+    jz .bad
+    cmp esi, 4
+    jb .bad
+    cmp byte [rdi], '<'
+    jne .bad
+    cmp byte [rdi + 1], '@'
+    jne .bad
+    mov edx, 2
+    cmp byte [rdi + rdx], '!'
+    jne .id
+    inc edx
+.id:
+    mov ecx, [gateway_bot_user_id_len]
+    test ecx, ecx
+    jle .bad
+    lea eax, [edx + ecx + 1]
+    cmp eax, esi
+    ja .bad
+    xor r8d, r8d
+.compare:
+    cmp r8d, ecx
+    jae .close
+    lea r9, [rdi + rdx]
+    mov al, [r9 + r8]
+    cmp al, [gateway_bot_user_id + r8]
+    jne .bad
+    inc r8d
+    jmp .compare
+.close:
+    add edx, ecx
+    cmp byte [rdi + rdx], '>'
+    jne .bad
+    lea eax, [rdx + 1]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 ; RDI=content, ESI=content length. EAX=command byte offset, -1 if no valid prefix.
 command_offset_after_prefix:
+
     cmp dword [bot_prefix_len], 0
     je .default_prefix
     mov r8, [bot_prefix_ptr]

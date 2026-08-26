@@ -287,7 +287,7 @@ token: db 'token-value'
 token_len equ $ - token
 hello_frame: db '{"op":10,"d":{"heartbeat_interval":45000}}'
 hello_frame_len equ $ - hello_frame
-ready_frame: db '{"op":0,"s":42,"t":"READY","d":{"session_id":"session-1","resume_gateway_url":"wss://resume.example/?v=10&encoding=json"}}'
+ready_frame: db '{"op":0,"s":42,"t":"READY","d":{"session_id":"session-1","resume_gateway_url":"wss://resume.example/?v=10&encoding=json","user":{"id":"9001"}}}'
 ready_frame_len equ $ - ready_frame
 heartbeat_request: db '{"op":1,"d":null}'
 heartbeat_request_len equ $ - heartbeat_request

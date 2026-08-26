@@ -4,6 +4,8 @@ DEFAULT REL
 global gateway_run
 global gateway_process_frame
 global gateway_reset_state
+global gateway_bot_user_id
+global gateway_bot_user_id_len
 
 global gateway_send_identify
 global gateway_send_resume
@@ -20,6 +22,7 @@ extern json_read_uint
 extern json_read_string
 extern json_escape_append
 extern json_value_is_true
+extern json_object_end
 extern dispatch_message_create
 extern guild_auth_reset
 extern guild_auth_cache_guild_create
@@ -36,6 +39,7 @@ extern lifecycle_member_remove
 %define SESSION_ID_CAP 256
 %define RESUME_URL_CAP 512
 %define EVENT_NAME_CAP 64
+%define BOT_USER_ID_CAP 64
 
 %define ACTION_NONE 0
 %define ACTION_RECONNECT 1
@@ -353,6 +357,38 @@ gateway_cache_ready:
     jle .bad
     mov [resume_url_len], eax
     mov byte [resume_url + rax], 0
+
+    ; READY carries the authenticated bot in d.user; cache only its bounded ID.
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_user]
+    mov ecx, key_user_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov rdi, rbx
+    mov rsi, rax
+    sub rsi, rbx
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    lea rsi, [r12 + r13]
+    lea rdx, [gateway_bot_user_id]
+    mov ecx, BOT_USER_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov [gateway_bot_user_id_len], eax
+    mov byte [gateway_bot_user_id + rax], 0
     xor eax, eax
     add rsp, 8
     ret
@@ -741,6 +777,10 @@ key_session_id: db 'session_id'
 key_session_id_len equ $ - key_session_id
 key_resume_gateway_url: db 'resume_gateway_url'
 key_resume_gateway_url_len equ $ - key_resume_gateway_url
+key_user: db 'user'
+key_user_len equ $ - key_user
+key_id: db 'id'
+key_id_len equ $ - key_id
 event_ready: db 'READY'
 event_ready_len equ $ - event_ready
 event_resumed: db 'RESUMED'
@@ -787,6 +827,7 @@ next_heartbeat_ms: dq 0
 gateway_length: dq 0
 session_id_len: dd 0
 resume_url_len: dd 0
+gateway_bot_user_id_len: dd 0
 clock_spec: dq 0, 0
 jitter_seed: dq 0
 
@@ -795,5 +836,6 @@ gateway_buffer: resb GATEWAY_BUFFER_CAP
 outbound_buffer: resb OUTBOUND_BUFFER_CAP
 session_id: resb SESSION_ID_CAP
 resume_url: resb RESUME_URL_CAP
+gateway_bot_user_id: resb BOT_USER_ID_CAP
 event_name: resb EVENT_NAME_CAP
 uint_scratch: resb 21
