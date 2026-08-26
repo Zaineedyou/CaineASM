@@ -27,6 +27,7 @@ global guild_auth_is_manager
 global guild_auth_roles_have
 global channel_auth_resolve
 global guild_auth_get_bot_roles
+global guild_auth_bot_above_roles
 global discord_unban_member
 global guild_word_add
 global guild_word_remove
@@ -1016,6 +1017,10 @@ channel_auth_resolve:
     ret
 .deny:
     mov rax, -1
+    ret
+
+guild_auth_bot_above_roles:
+    xor eax, eax
     ret
 
 guild_auth_get_bot_roles:

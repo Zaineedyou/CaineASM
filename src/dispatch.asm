@@ -32,6 +32,7 @@ extern guild_auth_is_manager
 extern guild_auth_roles_have
 extern channel_auth_resolve
 extern guild_auth_get_bot_roles
+extern guild_auth_bot_above_roles
 extern discord_unban_member
 extern guild_word_add
 extern guild_word_remove
@@ -777,6 +778,10 @@ dispatch_message_create:
 .moderation_error:
     lea rdi, [moderation_error_response]
     mov esi, moderation_error_response_len
+    jmp .reply
+.hierarchy_denied:
+    lea rdi, [hierarchy_denied_response]
+    mov esi, hierarchy_denied_response_len
     jmp .reply
 .policy_error:
     lea rdi, [policy_error_response]
@@ -1956,6 +1961,31 @@ dispatch_owner_authorized:
     xor eax, eax
     ret
 
+; RDI=target snowflake, ESI=len. AL=1 only when a bounded member GET returns
+; a complete role array and the cached bot highest role is strictly above it.
+dispatch_bot_above_target:
+    push r12
+    push r13
+    mov r12, rdi
+    mov r13d, esi
+    call dispatch_fetch_target_member_roles
+    test rax, rax
+    js .no
+    mov r8, rdx
+    mov r9d, ecx
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    mov rdx, r8
+    mov ecx, r9d
+    call guild_auth_bot_above_roles
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r13
+    pop r12
+    ret
+
 ; R8=requested Discord permission bitset. AL=1 only if the READY-cached bot
 ; has a complete role snapshot and its effective permission includes the bit.
 dispatch_bot_has_permission:
@@ -2418,6 +2448,8 @@ bot_denied_response: db 'Bot lacks the required effective channel permission.'
 bot_denied_response_len equ $ - bot_denied_response
 moderation_error_response: db 'Moderation request failed.'
 moderation_error_response_len equ $ - moderation_error_response
+hierarchy_denied_response: db 'Bot cannot moderate this target due to role hierarchy or incomplete member state.'
+hierarchy_denied_response_len equ $ - hierarchy_denied_response
 chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
 chat_default_prompt_len equ $ - chat_default_prompt
 key_message_reference: db 'message_reference'
