@@ -280,11 +280,11 @@ dispatch_message_create:
 .trigger_ready:
     mov ebx, eax                     ; offset after prefix or mention
     cmp ebx, r15d
-    jae .handled
+    jae .chat_empty_trigger
 
 .skip_spaces:
     cmp ebx, r15d
-    jae .handled
+    jae .chat_empty_trigger
     mov al, [message_content + rbx]
     cmp al, ' '
     je .space_advance
@@ -294,6 +294,13 @@ dispatch_message_create:
 .space_advance:
     inc ebx
     jmp .skip_spaces
+
+.chat_empty_trigger:
+    ; A literal prefix/mention with no text is still an explicit AI trigger.
+    ; It can therefore describe a whitelisted first image attachment, but an
+    ; untriggered attachment never reaches this path.
+    mov [command_start], ebx
+    jmp .chat
 
 .command:
     xor ecx, ecx
@@ -427,7 +434,7 @@ dispatch_message_create:
     mov ecx, VISION_IMAGE_CAP
     call attachment_fetch_https
     test rax, rax
-    jle .chat_text
+    jle .ai_error
     mov [vision_image_len], eax
     lea rdi, [vision_b64]
     mov esi, VISION_B64_CAP
@@ -435,7 +442,7 @@ dispatch_message_create:
     mov ecx, [vision_image_len]
     call base64_encode
     test eax, eax
-    jle .chat_text
+    jle .ai_error
     mov [vision_b64_len], eax
     mov rdi, [dispatch_tail_ptr]
     mov esi, [dispatch_tail_len]
@@ -2020,6 +2027,7 @@ unknown_response_len equ $ - unknown_response
 summarize_usage_response: db 'Usage: !summarize <text>'
 summarize_usage_response_len equ $ - summarize_usage_response
 ai_error_response: db 'AI request failed. Please try again shortly.'
+ai_error_response_len equ $ - ai_error_response
 ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
 ai_rate_limited_response_len equ $ - ai_rate_limited_response
 chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
@@ -2028,7 +2036,6 @@ history_server_prefix: db 'server-'
 history_server_prefix_len equ $ - history_server_prefix
 history_dm_prefix: db 'dm-'
 history_dm_prefix_len equ $ - history_dm_prefix
-ai_error_response_len equ $ - ai_error_response
 afk_response: db 'AFK status saved for this server.'
 afk_response_len equ $ - afk_response
 afk_unavailable_response: db 'AFK is available only for messages sent in a server.'

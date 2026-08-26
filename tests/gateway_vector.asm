@@ -16,6 +16,8 @@ global lifecycle_member_add
 global lifecycle_member_remove
 global discord_token_ptr
 global discord_token_len
+extern gateway_bot_user_id
+extern gateway_bot_user_id_len
 
 %define SYS_EXIT 60
 %define ACTION_RECONNECT 1
@@ -49,6 +51,14 @@ _start:
     call gateway_process_frame
     test eax, eax
     jnz .fail
+    cmp dword [gateway_bot_user_id_len], bot_user_id_len
+    jne .fail
+    lea rdi, [gateway_bot_user_id]
+    lea rsi, [bot_user_id]
+    mov edx, bot_user_id_len
+    call equal_bytes
+    test al, al
+    jz .fail
 
     ; Server heartbeat request emits the stored sequence, then ACK is accepted.
     mov dword [failure_stage], 3
@@ -152,6 +162,14 @@ _start:
     mov esi, reconnect_frame_len
     call gateway_process_frame
     cmp eax, ACTION_RECONNECT
+    jne .fail
+
+    ; Reset invalidates cached READY identity before any later dispatch.
+    mov dword [failure_stage], 8
+    call gateway_reset_state
+    cmp dword [gateway_bot_user_id_len], 0
+    jne .fail
+    cmp byte [gateway_bot_user_id], 0
     jne .fail
 
     mov eax, SYS_EXIT
@@ -289,6 +307,8 @@ hello_frame: db '{"op":10,"d":{"heartbeat_interval":45000}}'
 hello_frame_len equ $ - hello_frame
 ready_frame: db '{"op":0,"s":42,"t":"READY","d":{"session_id":"session-1","resume_gateway_url":"wss://resume.example/?v=10&encoding=json","user":{"id":"9001"}}}'
 ready_frame_len equ $ - ready_frame
+bot_user_id: db '9001'
+bot_user_id_len equ $ - bot_user_id
 heartbeat_request: db '{"op":1,"d":null}'
 heartbeat_request_len equ $ - heartbeat_request
 heartbeat_ack: db '{"op":11,"d":null}'

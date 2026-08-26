@@ -43,12 +43,18 @@ global gateway_bot_user_id
 global gateway_bot_user_id_len
 
 %define SYS_EXIT 60
+%define VISION_NONE 0
+%define VISION_OK 1
+%define VISION_FETCH_FAIL 2
 
 section .text
 _start:
     mov qword [bot_prefix_ptr], 0
     mov dword [bot_prefix_len], 0
     mov qword [send_calls], 0
+    mov dword [vision_mode], VISION_NONE
+    mov dword [vision_sequence], 0
+    mov byte [rate_allowed], 1
     lea rax, [groq_prompt]
     mov [expected_groq_ptr], rax
     mov dword [expected_groq_len], groq_prompt_len
@@ -486,8 +492,139 @@ _start:
     cmp qword [send_calls], 26
     jne .fail
 
-    ; A recognized future moderation command remains explicitly inactive.
+    ; A valid explicit prefix plus a whitelisted image executes parser → MIME
+    ; → fetch → Base64 → vision exactly once and does not call text Groq.
     mov dword [failure_stage], 28
+    mov dword [vision_mode], VISION_OK
+    mov dword [vision_sequence], 0
+    lea rax, [vision_prompt]
+    mov [expected_vision_ptr], rax
+    mov dword [expected_vision_len], vision_prompt_len
+    lea rax, [ai_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_response_len
+    lea rdi, [vision_event]
+    mov esi, vision_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp dword [vision_sequence], 5
+    jne .fail
+    cmp qword [vision_calls], 1
+    jne .fail
+    cmp qword [groq_calls], 2
+    jne .fail
+    cmp qword [send_calls], 27
+    jne .fail
+
+    ; A prefix-only image is still explicitly triggered and uses the bounded
+    ; default prompt; arbitrary image uploads remain ignored below.
+    mov dword [failure_stage], 29
+    mov dword [vision_sequence], 0
+    lea rax, [vision_default_prompt]
+    mov [expected_vision_ptr], rax
+    mov dword [expected_vision_len], vision_default_prompt_len
+    lea rdi, [vision_empty_event]
+    mov esi, vision_empty_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp dword [vision_sequence], 5
+    jne .fail
+    cmp qword [vision_calls], 2
+    jne .fail
+    cmp qword [send_calls], 28
+    jne .fail
+
+    ; Cached READY identity permits the mention trigger without a prefix.
+    mov dword [failure_stage], 30
+    lea rdi, [gateway_bot_user_id]
+    lea rsi, [bot_user_id]
+    mov edx, bot_user_id_len
+    call copy_bytes
+    mov dword [gateway_bot_user_id_len], bot_user_id_len
+    mov dword [vision_sequence], 0
+    lea rax, [mention_vision_prompt]
+    mov [expected_vision_ptr], rax
+    mov dword [expected_vision_len], mention_vision_prompt_len
+    lea rdi, [mention_vision_event]
+    mov esi, mention_vision_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp dword [vision_sequence], 5
+    jne .fail
+    cmp qword [vision_calls], 3
+    jne .fail
+    cmp qword [send_calls], 29
+    jne .fail
+
+    ; After an image is selected, fetch failure must report AI failure and
+    ; never silently fall back to a text completion or a vision call.
+    mov dword [failure_stage], 31
+    mov dword [vision_mode], VISION_FETCH_FAIL
+    mov dword [vision_sequence], 0
+    lea rax, [ai_error_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_error_response_len
+    lea rdi, [vision_event]
+    mov esi, vision_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    mov dword [failure_stage], 312
+    cmp dword [vision_sequence], 3
+    jne .fail
+    mov dword [failure_stage], 313
+    cmp qword [vision_calls], 3
+    jne .fail
+    mov dword [failure_stage], 314
+    cmp qword [groq_calls], 2
+    jne .fail
+    mov dword [failure_stage], 315
+    cmp qword [send_calls], 30
+    jne .fail
+
+    ; The limiter runs before attachment handling, so a denied request has no
+    ; parser/fetch/Base64/vision work and receives the bounded limiter reply.
+    mov dword [failure_stage], 32
+    mov byte [rate_allowed], 0
+    mov dword [vision_mode], VISION_OK
+    mov dword [vision_sequence], 0
+    lea rax, [ai_rate_limited_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_rate_limited_response_len
+    lea rdi, [vision_event]
+    mov esi, vision_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp dword [vision_sequence], 0
+    jne .fail
+    cmp qword [vision_calls], 3
+    jne .fail
+    cmp qword [send_calls], 31
+    jne .fail
+    mov byte [rate_allowed], 1
+
+    ; An image without prefix or bot mention is ignored before parser work.
+    mov dword [failure_stage], 33
+    mov dword [vision_sequence], 0
+    lea rdi, [untriggered_image_event]
+    mov esi, untriggered_image_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp dword [vision_sequence], 0
+    jne .fail
+    cmp qword [vision_calls], 3
+    jne .fail
+    cmp qword [send_calls], 31
+    jne .fail
+
+    ; A recognized future moderation command remains explicitly inactive.
+    mov dword [failure_stage], 34
+    mov dword [vision_mode], VISION_NONE
     lea rax, [registered_notice]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], registered_notice_len
@@ -496,7 +633,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 27
+    cmp qword [send_calls], 32
     jne .fail
 
     mov eax, SYS_EXIT
@@ -524,7 +661,8 @@ history_clear:
     ret
 
 ai_rate_allow:
-    mov al, 1
+    inc qword [rate_allow_calls]
+    mov al, [rate_allowed]
     ret
 
 ; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
@@ -553,21 +691,127 @@ groq_chat_once:
     mov eax, -1
     ret
 
-; Text fixtures do not carry an image; vision seams reject and dispatch falls back to Groq text.
+; Vision seams implement a small ordered fixture. When no image fixture is
+; selected they reject, which preserves the normal text-chat fallback path.
 attachment_extract_image_url:
+    cmp dword [vision_mode], VISION_NONE
+    je .bad
+    cmp dword [vision_sequence], 0
+    jne .bad
+    mov rdi, rdx
+    lea rsi, [vision_url]
+    mov edx, vision_url_len
+    call copy_bytes
+    mov dword [vision_sequence], 1
+    mov eax, vision_url_len
+    ret
+.bad:
     mov eax, -1
     ret
 attachment_copy_image_mime:
+    cmp dword [vision_mode], VISION_NONE
+    je .bad
+    cmp dword [vision_sequence], 1
+    jne .bad
+    lea rsi, [vision_mime]
+    mov edx, vision_mime_len
+    call copy_bytes
+    mov dword [vision_sequence], 2
+    mov eax, vision_mime_len
+    ret
+.bad:
     mov eax, -1
     ret
 attachment_fetch_https:
+    cmp dword [vision_mode], VISION_NONE
+    je .bad
+    cmp dword [vision_sequence], 2
+    jne .bad
+    mov dword [vision_sequence], 3
+    cmp dword [vision_mode], VISION_FETCH_FAIL
+    je .bad
+    mov rdi, rdx
+    lea rsi, [vision_image]
+    mov edx, vision_image_len
+    call copy_bytes
+    mov eax, vision_image_len
+    ret
+.bad:
     mov eax, -1
     ret
 base64_encode:
+    cmp dword [vision_mode], VISION_OK
+    jne .bad
+    cmp dword [vision_sequence], 3
+    jne .bad
+    lea rsi, [vision_b64]
+    mov edx, vision_b64_len
+    call copy_bytes
+    mov dword [vision_sequence], 4
+    mov eax, vision_b64_len
+    ret
+.bad:
     mov eax, -1
     ret
+; RDI=prompt, ESI=len, RDX=mime, ECX=mime len, R8=Base64, R9D=len.
+; Stack holds reply pointer then reply capacity.
 groq_vision_once:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdx
+    mov r13d, ecx
+    mov r14, r8
+    mov r15d, r9d
+    cmp dword [vision_mode], VISION_OK
+    jne .bad
+    cmp dword [vision_sequence], 4
+    jne .bad
+    cmp esi, [expected_vision_len]
+    jne .bad
+    mov r10, [expected_vision_ptr]
+    mov r11d, esi
+    mov rsi, r10
+    mov edx, r11d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r13d, vision_mime_len
+    jne .bad
+    mov rdi, r12
+    lea rsi, [vision_mime]
+    mov edx, vision_mime_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r15d, vision_b64_len
+    jne .bad
+    mov rdi, r14
+    lea rsi, [vision_b64]
+    mov edx, vision_b64_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    mov r10, [rsp + 40]
+    mov r11d, [rsp + 48]
+    cmp r11d, ai_response_len + 1
+    jb .bad
+    mov rdi, r10
+    lea rsi, [ai_response]
+    mov edx, ai_response_len
+    call copy_bytes
+    mov dword [vision_sequence], 5
+    inc qword [vision_calls]
+    mov eax, ai_response_len
+    jmp .out
+.bad:
     mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
     ret
 
 ; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=current score.
@@ -869,20 +1113,20 @@ discord_send_text:
     mov r9d, [expected_channel_len]
 .channel_ready:
     cmp esi, r9d
-    jne .bad
+    jne .bad_channel_len
     mov rsi, r8
     mov edx, r9d
     call equal_bytes
     test al, al
-    jz .bad
+    jz .bad_channel_bytes
     cmp r10d, [expected_text_len]
-    jne .bad
+    jne .bad_text_len
     mov rdi, r11
     mov rsi, [expected_text_ptr]
     mov edx, r10d
     call equal_bytes
     test al, al
-    jz .bad
+    jz .bad_text_bytes
     inc qword [send_calls]
     cmp dword [report_followup_enabled], 0
     je .ok
@@ -895,6 +1139,17 @@ discord_send_text:
 .ok:
     xor eax, eax
     ret
+.bad_channel_len:
+    mov dword [failure_stage], 401
+    jmp .bad
+.bad_channel_bytes:
+    mov dword [failure_stage], 402
+    jmp .bad
+.bad_text_len:
+    mov [failure_stage], r10d
+    jmp .bad
+.bad_text_bytes:
+    mov dword [failure_stage], 404
 .bad:
     mov eax, -1
     ret
@@ -1003,6 +1258,30 @@ report_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channe
 report_event_len equ $ - report_event
 chat_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^how are you","author":{"id":"112233445566778899","bot":false}}}'
 chat_event_len equ $ - chat_event
+vision_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^describe this","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
+vision_event_len equ $ - vision_event
+vision_empty_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
+vision_empty_event_len equ $ - vision_empty_event
+mention_vision_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"<@9001> inspect","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
+mention_vision_event_len equ $ - mention_vision_event
+untriggered_image_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"random image","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
+untriggered_image_event_len equ $ - untriggered_image_event
+vision_prompt: db 'describe this'
+vision_prompt_len equ $ - vision_prompt
+mention_vision_prompt: db 'inspect'
+mention_vision_prompt_len equ $ - mention_vision_prompt
+vision_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
+vision_default_prompt_len equ $ - vision_default_prompt
+vision_url: db 'https://cdn.discordapp.com/a.png'
+vision_url_len equ $ - vision_url
+vision_mime: db 'image/png'
+vision_mime_len equ $ - vision_mime
+vision_image: db 1, 2, 3
+vision_image_len equ $ - vision_image
+vision_b64: db 'AQID'
+vision_b64_len equ $ - vision_b64
+bot_user_id: db '9001'
+bot_user_id_len equ $ - bot_user_id
 help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
@@ -1077,6 +1356,10 @@ report_log_text: db 'REPORT', 10, 'Reporter: <@112233445566778899>', 10, 'Target
 report_log_text_len equ $ - report_log_text
 report_log_channel_value: db '998877665544332211'
 report_log_channel_value_len equ $ - report_log_channel_value
+ai_error_response: db 'AI request failed. Please try again shortly.'
+ai_error_response_len equ $ - ai_error_response
+ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
+ai_rate_limited_response_len equ $ - ai_rate_limited_response
 
 section .data
 bot_prefix_ptr: dq 0
@@ -1115,3 +1398,10 @@ warnings_add_calls: dq 0
 warnings_get_calls: dq 0
 warnings_clear_calls: dq 0
 failure_stage: dd 0
+vision_mode: dd VISION_NONE
+vision_sequence: dd 0
+rate_allowed: db 1
+rate_allow_calls: dq 0
+vision_calls: dq 0
+expected_vision_ptr: dq 0
+expected_vision_len: dd 0

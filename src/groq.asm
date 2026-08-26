@@ -5,6 +5,7 @@ global groq_chat_once
 global groq_vision_once
 global groq_select_guild
 global groq_select_history
+global groq_get_selected_history_limit
 
 extern secure_https_post_json
 extern groq_key_ptr
@@ -15,6 +16,7 @@ extern json_find_key
 extern json_read_string
 extern guild_config_get
 extern history_visit_recent
+extern history_visit_recent_reverse
 extern history_append
 
 %define SYS_NANOSLEEP 35
@@ -118,8 +120,23 @@ groq_chat_once:
     jz .history_done
     test esi, esi
     jle .history_done
-    lea rdx, [groq_history_callback]
+    ; First walk newest-to-oldest only to count complete history entries that
+    ; still leave space for the current user turn and suffix. A second bounded
+    ; chronological walk emits that newest tail. This keeps the 16 KiB body
+    ; valid at mature ring depth without heap or a second message buffer.
+    mov dword [selected_history_emit_count], 0
+    mov dword [selected_history_emit_bytes], 0
+    lea rdx, [groq_history_select_callback]
     mov ecx, [selected_history_limit]
+    call history_visit_recent_reverse
+    test eax, eax
+    js .bad
+    mov ecx, [selected_history_emit_count]
+    test ecx, ecx
+    jle .history_done
+    mov rdi, [selected_history_key_ptr]
+    mov esi, [selected_history_key_len]
+    lea rdx, [groq_history_callback]
     call history_visit_recent
     test eax, eax
     js .bad
@@ -420,11 +437,11 @@ groq_select_guild:
     mov ecx, setting_persona_len
     call guild_config_get
     test rax, rax
-    jz .done
+    jz .history_limit
     test edx, edx
-    jle .done
+    jle .history_limit
     cmp edx, 511
-    ja .done
+    ja .history_limit
     mov [selected_persona_ptr], rax
     mov [selected_persona_len], edx
 .history_limit:
@@ -447,6 +464,12 @@ groq_select_guild:
     xor eax, eax
     pop r13
     pop r12
+    ret
+
+; EAX=current effective bound selected for the next text request. This read-only
+; accessor is used by local vectors to lock the 5..32 clamp contract.
+groq_get_selected_history_limit:
+    mov eax, [selected_history_limit]
     ret
 
 ; RDI=decimal bytes, ESI=len. EAX=5..32, or -1.
@@ -481,6 +504,68 @@ groq_parse_history_limit:
     ret
 .bad:
     mov eax, -1
+    ret
+
+; Reverse selection callback. It receives entries newest first and stops at
+; the first entry that would make the final request exceed GROQ_BODY_CAP - 1.
+; RDI=role, ESI=role len, RDX=content, ECX=content len. EAX=0 continue,
+; 1 successful stop, or -1 on impossible bounded input.
+groq_history_select_callback:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    cmp r13d, role_user_len
+    je .user_role
+    cmp r13d, role_assistant_len
+    jne .skip
+    mov ebx, role_assistant_len
+    jmp .role_ready
+.user_role:
+    mov ebx, role_user_len
+.role_ready:
+    mov rdi, r14
+    mov esi, r15d
+    call groq_escaped_length
+    test eax, eax
+    js .bad
+    add eax, request_history_prefix_len + request_history_middle_len + request_history_suffix_len
+    add eax, ebx
+    mov r13d, eax
+    mov edx, [request_body_len]
+    add edx, [selected_history_emit_bytes]
+    add edx, r13d
+    mov r15d, edx
+    mov rdi, [current_prompt_ptr]
+    mov esi, [current_prompt_len]
+    call groq_escaped_length
+    test eax, eax
+    js .bad
+    add eax, request_before_user_len + request_suffix_len
+    add r15d, eax
+    cmp r15d, GROQ_BODY_CAP - 1
+    ja .stop
+    add [selected_history_emit_bytes], r13d
+    inc dword [selected_history_emit_count]
+.skip:
+    xor eax, eax
+    jmp .out
+.stop:
+    mov eax, 1
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; history_visit_recent callback. RDI=role, ESI=role len, RDX=content, ECX=content len.
@@ -573,6 +658,50 @@ groq_store_history:
 .done:
     pop r13
     pop r12
+    ret
+
+; RDI=source, ESI=len. EAX=JSON-escaped byte length, or -1 for invalid input.
+; This mirrors json_escape_append without writing, so capacity selection is exact.
+groq_escaped_length:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    js .bad
+    xor eax, eax
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .done
+    movzx edx, byte [rdi + rcx]
+    inc ecx
+    cmp dl, '"'
+    je .two
+    cmp dl, 0x5c
+    je .two
+    cmp dl, 8
+    je .two
+    cmp dl, 12
+    je .two
+    cmp dl, 10
+    je .two
+    cmp dl, 13
+    je .two
+    cmp dl, 9
+    je .two
+    cmp dl, 0x20
+    jb .six
+    inc eax
+    jmp .loop
+.two:
+    add eax, 2
+    jmp .loop
+.six:
+    add eax, 6
+    jmp .loop
+.done:
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; RDI=source, ESI=len. EAX=0 or -1.
@@ -723,6 +852,8 @@ selected_persona_len: dd default_persona_len
 selected_history_key_ptr: dq 0
 selected_history_key_len: dd 0
 selected_history_limit: dd GROQ_HISTORY_DEFAULT
+selected_history_emit_count: dd 0
+selected_history_emit_bytes: dd 0
 current_prompt_ptr: dq 0
 current_prompt_len: dd 0
 last_reply_len: dd 0

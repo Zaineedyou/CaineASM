@@ -746,6 +746,8 @@ gateway_reset_state:
     mov qword [sequence], 0
     mov dword [session_id_len], 0
     mov dword [resume_url_len], 0
+    mov dword [gateway_bot_user_id_len], 0
+    mov byte [gateway_bot_user_id], 0
     ret
 
 ; RDI=destination, RSI=source, EDX=count.
