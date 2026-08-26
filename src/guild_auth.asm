@@ -5,7 +5,9 @@ global guild_auth_reset
 global guild_auth_cache_owner
 global guild_auth_cache_role
 global guild_auth_is_owner
+global guild_auth_is_manager
 global guild_auth_roles_have
+global guild_auth_roles_permissions
 global guild_auth_cache_guild_create
 
 extern json_find_key
@@ -13,6 +15,8 @@ extern json_object_end
 extern json_array_end
 extern json_read_string
 extern json_read_uint
+extern bot_owner_ptr
+extern bot_owner_len
 
 %define ID_CAP 64
 %define OWNER_SLOT_COUNT 64
@@ -127,6 +131,47 @@ guild_auth_cache_role:
     jmp .out
 .bad:
     mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len. AL=1 when the user
+; matches BOT_OWNER_ID (if configured) or the trusted cached guild owner.
+guild_auth_is_manager:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r14, r14
+    jz .owner
+    test r15d, r15d
+    jz .owner
+    mov eax, [bot_owner_len]
+    test eax, eax
+    jz .owner
+    cmp eax, r15d
+    jne .owner
+    mov rdi, [bot_owner_ptr]
+    test rdi, rdi
+    jz .owner
+    mov rsi, r14
+    mov edx, r15d
+    call equal_bytes
+    test al, al
+    jnz .out
+.owner:
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r14
+    mov ecx, r15d
+    call guild_auth_is_owner
 .out:
     pop r15
     pop r14
@@ -516,6 +561,93 @@ auth_clear_guild:
     inc r10d
     jmp .role_loop
 .out:
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=opening member roles JSON array, ECX=array len.
+; RAX=base permission union for cached @everyone plus listed roles, or -1 for
+; invalid/missing bounded state. This does not apply channel overwrites.
+guild_auth_roles_permissions:
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r15d, r15d
+    jle .bad
+    lea rax, [r14 + r15]
+    mov [rsp], rax
+    mov rdi, r14
+    mov rsi, rax
+    call json_array_end
+    test rax, rax
+    jz .bad
+    cmp rax, [rsp]
+    jne .bad
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r12
+    mov ecx, r13d
+    call get_role_permissions
+    mov [accumulated_permissions], rax
+    lea r15, [r14 + 1]
+.skip_ws:
+    mov r11, [rsp]
+    dec r11
+    cmp r15, r11
+    jae .done
+    mov al, [r15]
+    cmp al, ' '
+    je .advance
+    cmp al, 9
+    je .advance
+    cmp al, 10
+    je .advance
+    cmp al, 13
+    je .advance
+    cmp al, ','
+    je .advance
+    cmp al, '"'
+    jne .bad
+    mov rdi, r15
+    mov rsi, [rsp]
+    lea rdx, [role_id]
+    mov ecx, ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov r15, rdx
+    mov r10d, eax
+    mov rdi, r12
+    mov esi, r13d
+    lea rdx, [role_id]
+    mov ecx, r10d
+    call get_role_permissions
+    or [accumulated_permissions], rax
+    jmp .skip_ws
+.advance:
+    inc r15
+    jmp .skip_ws
+.done:
+    mov rax, [accumulated_permissions]
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    add rsp, 8
+    pop r15
+    pop r14
     pop r13
     pop r12
     ret

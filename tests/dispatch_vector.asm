@@ -13,11 +13,12 @@ global afk_clear
 global state_format_afk_list
 global state_format_leaderboard
 global state_format_banned_words
-global guild_auth_is_owner
+global guild_auth_is_manager
 global guild_word_add
 global guild_word_remove
 global guild_channel_disable
 global guild_channel_enable
+global guild_channel_is_disabled
 global bot_prefix_ptr
 global bot_prefix_len
 
@@ -272,7 +273,7 @@ afk_clear:
     ret
 
 ; Owner seam allows the test fixture's guild owner through the safe temporary gate.
-guild_auth_is_owner:
+guild_auth_is_manager:
     mov al, 1
     ret
 
@@ -290,6 +291,9 @@ guild_channel_disable:
     ret
 guild_channel_enable:
     inc qword [channel_enable_calls]
+    xor eax, eax
+    ret
+guild_channel_is_disabled:
     xor eax, eax
     ret
 

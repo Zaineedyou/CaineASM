@@ -17,11 +17,12 @@ extern xp_get
 extern state_format_afk_list
 extern state_format_leaderboard
 extern state_format_banned_words
-extern guild_auth_is_owner
+extern guild_auth_is_manager
 extern guild_word_add
 extern guild_word_remove
 extern guild_channel_disable
 extern guild_channel_enable
+extern guild_channel_is_disabled
 extern bot_prefix_ptr
 extern bot_prefix_len
 
@@ -174,6 +175,18 @@ dispatch_message_create:
     jle .handled
     mov r15d, eax
 
+    ; Disabled channels still reach prior message-state bookkeeping, but no
+    ; command/AI routing is allowed, matching the source event order.
+    cmp dword [guild_id_len], 0
+    je .routing_enabled
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [channel_id]
+    mov ecx, r14d
+    call guild_channel_is_disabled
+    test al, al
+    jnz .handled
+.routing_enabled:
     lea rdi, [message_content]
     mov esi, r15d
     call command_offset_after_prefix
@@ -566,8 +579,8 @@ dispatch_message_create:
     pop rbx
     ret
 
-; AL=1 only for a cached server owner in a guild context. This is deliberately
-; fail-closed until channel-overwrite authorization is connected for non-owner admins.
+; AL=1 only for BOT_OWNER_ID or a cached server owner in a guild context. This
+; remains fail-closed for non-owner administrators until overwrite resolution exists.
 dispatch_owner_authorized:
     cmp dword [guild_id_len], 0
     je .no
@@ -578,7 +591,7 @@ dispatch_owner_authorized:
     mov esi, [guild_id_len]
     lea rdx, [author_id]
     mov ecx, [author_id_len]
-    call guild_auth_is_owner
+    call guild_auth_is_manager
     add rsp, 8
     ret
 .no:

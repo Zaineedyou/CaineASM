@@ -10,6 +10,8 @@ global bot_prefix_ptr
 global bot_prefix_len
 global state_file_ptr
 global state_file_len
+global bot_owner_ptr
+global bot_owner_len
 
 extern gateway_run
 extern persist_configure
@@ -90,6 +92,12 @@ load_environment:
     call has_prefix
     test al, al
     jnz .state_file
+    mov rdi, rbx
+    lea rsi, [env_bot_owner]
+    mov ecx, env_bot_owner_len
+    call has_prefix
+    test al, al
+    jnz .bot_owner
 .advance:
     add r13, 8
     jmp .next
@@ -120,6 +128,13 @@ load_environment:
     mov rdi, rax
     call cstring_length
     mov [state_file_len], eax
+    jmp .advance
+.bot_owner:
+    lea rax, [rbx + env_bot_owner_len]
+    mov [bot_owner_ptr], rax
+    mov rdi, rax
+    call cstring_length
+    mov [bot_owner_len], eax
     jmp .advance
 .done:
     ret
@@ -162,6 +177,8 @@ env_prefix: db 'BOT_PREFIX='
 env_prefix_len equ $ - env_prefix
 env_state_file: db 'CAINE_STATE_FILE='
 env_state_file_len equ $ - env_state_file
+env_bot_owner: db 'BOT_OWNER_ID='
+env_bot_owner_len equ $ - env_bot_owner
 configuration_error: db 'caine-asm: DISCORD_TOKEN and GROQ_API_KEY are required', 10
 configuration_error_len equ $ - configuration_error
 state_error: db 'caine-asm: CAINE_STATE_FILE journal is unreadable or invalid', 10
@@ -176,3 +193,5 @@ bot_prefix_ptr: dq 0
 bot_prefix_len: dd 0
 state_file_ptr: dq 0
 state_file_len: dd 0
+bot_owner_ptr: dq 0
+bot_owner_len: dd 0

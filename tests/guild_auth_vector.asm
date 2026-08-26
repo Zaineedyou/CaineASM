@@ -2,12 +2,16 @@ BITS 64
 DEFAULT REL
 
 global _start
+global bot_owner_ptr
+global bot_owner_len
 
 extern guild_auth_reset
 extern guild_auth_cache_owner
 extern guild_auth_cache_role
 extern guild_auth_is_owner
+extern guild_auth_is_manager
 extern guild_auth_roles_have
+extern guild_auth_roles_permissions
 extern guild_auth_cache_guild_create
 
 %define SYS_EXIT 60
@@ -18,6 +22,8 @@ extern guild_auth_cache_guild_create
 
 section .text
 _start:
+    mov qword [bot_owner_ptr], 0
+    mov dword [bot_owner_len], 0
     call guild_auth_reset
 
     ; Owner identity is exact-guild and exact-user scoped.
@@ -42,6 +48,18 @@ _start:
     call guild_auth_is_owner
     test al, al
     jnz .fail
+    lea rax, [external_owner]
+    mov [bot_owner_ptr], rax
+    mov dword [bot_owner_len], external_owner_len
+    lea rdi, [guild_two]
+    mov esi, guild_two_len
+    lea rdx, [external_owner]
+    mov ecx, external_owner_len
+    call guild_auth_is_manager
+    test al, al
+    jz .fail
+    mov qword [bot_owner_ptr], 0
+    mov dword [bot_owner_len], 0
 
     ; @everyone and member roles combine with a bitwise union.
     lea rdi, [guild_one]
@@ -76,6 +94,13 @@ _start:
     call guild_auth_roles_have
     test al, al
     jnz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    call guild_auth_roles_permissions
+    cmp rax, PERM_KICK | PERM_BAN
+    jne .fail
 
     ; Administrator role bypasses individual requested permission bits.
     lea rdi, [guild_one]
@@ -112,6 +137,13 @@ _start:
     call guild_auth_roles_have
     test al, al
     jnz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [malformed_roles]
+    mov ecx, malformed_roles_len
+    call guild_auth_roles_permissions
+    cmp rax, -1
+    jne .fail
 
     ; Reset clears every owner and role cache record.
     call guild_auth_reset
@@ -177,6 +209,8 @@ guild_two: db '1002'
 guild_two_len equ $ - guild_two
 owner_one: db '9001'
 owner_one_len equ $ - owner_one
+external_owner: db 'external-owner'
+external_owner_len equ $ - external_owner
 role_mod: db '2001'
 role_mod_len equ $ - role_mod
 role_admin: db '2002'
@@ -193,4 +227,6 @@ truncated_guild_create: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001"'
 truncated_guild_create_len equ $ - truncated_guild_create
 
 section .data
+bot_owner_ptr: dq 0
+bot_owner_len: dd 0
 failure_stage: dd 1
