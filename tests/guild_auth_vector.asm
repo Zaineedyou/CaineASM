@@ -4,6 +4,8 @@ DEFAULT REL
 global _start
 global bot_owner_ptr
 global bot_owner_len
+global gateway_bot_user_id
+global gateway_bot_user_id_len
 
 extern guild_auth_reset
 extern guild_auth_cache_owner
@@ -12,6 +14,8 @@ extern guild_auth_cache_role_position
 extern guild_auth_role_position
 extern guild_auth_member_highest_position
 extern guild_auth_bot_above_member
+extern guild_auth_cache_bot_member
+extern guild_auth_bot_above_roles
 extern guild_auth_is_owner
 extern guild_auth_is_manager
 extern guild_auth_roles_have
@@ -28,6 +32,9 @@ section .text
 _start:
     mov qword [bot_owner_ptr], 0
     mov dword [bot_owner_len], 0
+    mov dword [gateway_bot_user_id], '9001'
+    mov byte [gateway_bot_user_id + bot_user_id_len], 0
+    mov dword [gateway_bot_user_id_len], bot_user_id_len
     call guild_auth_reset
 
     ; Owner identity is exact-guild and exact-user scoped.
@@ -181,6 +188,31 @@ _start:
     test al, al
     jnz .fail
 
+    ; Bot role snapshot is bounded per guild and absent state cannot pass a
+    ; hierarchy check.
+    mov dword [failure_stage], 10
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_admin_roles]
+    mov ecx, member_admin_roles_len
+    call guild_auth_cache_bot_member
+    test eax, eax
+    jnz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    call guild_auth_bot_above_roles
+    test al, al
+    jz .fail
+    lea rdi, [guild_two]
+    mov esi, guild_two_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    call guild_auth_bot_above_roles
+    test al, al
+    jnz .fail
+
     ; Malformed roles JSON and unknown guild role entries fail closed.
     lea rdi, [guild_one]
     mov esi, guild_one_len
@@ -227,11 +259,13 @@ _start:
     ; GUILD_CREATE parsing populates the same owner and role cache in NASM.
     mov dword [failure_stage], 7
     call guild_auth_reset
+    mov dword [failure_stage], 71
     lea rdi, [guild_create_event]
     mov esi, guild_create_event_len
     call guild_auth_cache_guild_create
     test eax, eax
     jnz .fail
+    mov dword [failure_stage], 72
     lea rdi, [guild_one]
     mov esi, guild_one_len
     lea rdx, [owner_one]
@@ -254,6 +288,14 @@ _start:
     call guild_auth_role_position
     cmp eax, 10
     jne .fail
+    mov dword [failure_stage], 73
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [member_roles]
+    mov ecx, member_roles_len
+    call guild_auth_bot_above_roles
+    test al, al
+    jz .fail
 
     ; A truncated guild payload fails safely.
     lea rdi, [truncated_guild_create]
@@ -279,6 +321,8 @@ owner_one: db '9001'
 owner_one_len equ $ - owner_one
 external_owner: db 'external-owner'
 external_owner_len equ $ - external_owner
+bot_user_id: db '9001'
+bot_user_id_len equ $ - bot_user_id
 role_mod: db '2001'
 role_mod_len equ $ - role_mod
 role_admin: db '2002'
@@ -289,7 +333,7 @@ member_admin_roles: db '["2002"]'
 member_admin_roles_len equ $ - member_admin_roles
 malformed_roles: db '["2001"'
 malformed_roles_len equ $ - malformed_roles
-guild_create_event: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[{"id":"1001","permissions":"2","position":0},{"id":"2001","permissions":"4","position":10}]}}'
+guild_create_event: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[{"id":"1001","permissions":"2","position":0},{"id":"2001","permissions":"4","position":10},{"id":"2002","permissions":"8","position":20}],"members":[{"user":{"id":"9001"},"roles":["2002"]}]}}'
 guild_create_event_len equ $ - guild_create_event
 truncated_guild_create: db '{"op":0,"t":"GUILD_CREATE","d":{"id":"1001"'
 truncated_guild_create_len equ $ - truncated_guild_create
@@ -298,3 +342,5 @@ section .data
 bot_owner_ptr: dq 0
 bot_owner_len: dd 0
 failure_stage: dd 1
+gateway_bot_user_id: times 64 db 0
+gateway_bot_user_id_len: dd 0

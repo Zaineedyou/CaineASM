@@ -4,6 +4,8 @@ DEFAULT REL
 global _start
 global bot_owner_ptr
 global bot_owner_len
+global gateway_bot_user_id
+global gateway_bot_user_id_len
 
 extern guild_auth_reset
 extern guild_auth_cache_role_position
@@ -267,4 +269,6 @@ truncated_guild_create_channels_len equ $ - truncated_guild_create_channels
 section .data
 bot_owner_ptr: dq 0
 bot_owner_len: dd 0
+gateway_bot_user_id: times 64 db 0
+gateway_bot_user_id_len: dd 0
 failure_stage: dd 0

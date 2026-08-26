@@ -8,6 +8,8 @@ global guild_auth_cache_role_position
 global guild_auth_role_position
 global guild_auth_member_highest_position
 global guild_auth_bot_above_member
+global guild_auth_cache_bot_member
+global guild_auth_bot_above_roles
 global guild_auth_is_owner
 global guild_auth_is_manager
 global guild_auth_roles_have
@@ -21,12 +23,17 @@ extern json_read_string
 extern json_read_uint
 extern bot_owner_ptr
 extern bot_owner_len
+extern gateway_bot_user_id
+extern gateway_bot_user_id_len
 
 %define ID_CAP 64
 %define OWNER_SLOT_COUNT 64
 %define OWNER_SLOT_SIZE 144
 %define ROLE_SLOT_COUNT 256
 %define ROLE_SLOT_SIZE 160
+%define BOT_MEMBER_SLOT_COUNT 64
+%define BOT_MEMBER_SLOT_SIZE 1104
+%define BOT_MEMBER_ROLES_CAP 1024
 %define PERMISSION_ADMINISTRATOR 8
 
 ; Ephemeral authorization cache. It is populated from trusted Gateway guild
@@ -39,7 +46,7 @@ section .text
 ; Clear cached guild owner and role entries.
 guild_auth_reset:
     xor eax, eax
-    mov ecx, OWNER_SLOT_COUNT * OWNER_SLOT_SIZE + ROLE_SLOT_COUNT * ROLE_SLOT_SIZE
+    mov ecx, OWNER_SLOT_COUNT * OWNER_SLOT_SIZE + ROLE_SLOT_COUNT * ROLE_SLOT_SIZE + BOT_MEMBER_SLOT_COUNT * BOT_MEMBER_SLOT_SIZE
     lea rdi, [owner_slots]
 .clear:
     cmp eax, ecx
@@ -505,6 +512,13 @@ guild_auth_cache_guild_create:
     mov rbx, [snapshot_object_end]
     jmp .role_loop
 .done:
+    mov rdi, [snapshot_data_ptr]
+    mov rsi, [snapshot_data_end]
+    lea rdx, [snapshot_guild]
+    mov ecx, [snapshot_guild_len]
+    call guild_auth_cache_bot_from_payload
+    test eax, eax
+    js .bad
     xor eax, eax
     jmp .out
 .bad:
@@ -516,6 +530,149 @@ guild_auth_cache_guild_create:
     pop r12
     pop rbx
     ret
+
+; RDI=guild data object, RSI=exclusive end, RDX=guild ID, ECX=len. EAX=0 when
+; the READY-cached bot member is stored if present; absent members remain a
+; fail-closed hierarchy cache miss rather than invalidating role permissions.
+guild_auth_cache_bot_from_payload:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    mov r15d, ecx
+    cmp dword [gateway_bot_user_id_len], 0
+    jle .done
+    mov rdi, r12
+    mov rsi, r13
+    sub rsi, rdi
+    lea rdx, [key_members]
+    mov ecx, key_members_len
+    call json_find_key
+    test rax, rax
+    jz .done
+    cmp byte [rax], '['
+    jne .done
+    mov [snapshot_members_start], rax
+    mov rdi, rax
+    mov rsi, r13
+    call json_array_end
+    test rax, rax
+    jz .bad
+    cmp rax, r13
+    ja .bad
+    mov [snapshot_members_end], rax
+    mov rbx, [snapshot_members_start]
+    inc rbx
+.loop:
+    mov rdi, rbx
+    mov rsi, [snapshot_members_end]
+    call snapshot_skip_delimiters
+    mov rbx, rax
+    mov r11, [snapshot_members_end]
+    dec r11
+    cmp rbx, r11
+    jae .done
+    cmp byte [rbx], '{'
+    jne .bad
+    mov rdi, rbx
+    mov rsi, [snapshot_members_end]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov [snapshot_member_object_end], rax
+    mov rdi, rbx
+    mov rsi, rax
+    sub rsi, rdi
+    lea rdx, [key_user]
+    mov ecx, key_user_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    cmp byte [rax], '{'
+    jne .bad
+    mov rdi, rax
+    mov rsi, [snapshot_member_object_end]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov [snapshot_user_object_end], rax
+    mov rdi, [snapshot_user_object_end]
+    ; json_find_key needs object start, so reconstruct from user pointer preserved below.
+    mov rdi, rbx
+    mov rsi, [snapshot_member_object_end]
+    sub rsi, rdi
+    lea rdx, [key_user]
+    mov ecx, key_user_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov [snapshot_user_object_start], rax
+    mov rdi, rax
+    mov rsi, [snapshot_user_object_end]
+    sub rsi, rdi
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    mov rsi, [snapshot_user_object_end]
+    lea rdx, [snapshot_member_id]
+    mov ecx, ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    cmp eax, [gateway_bot_user_id_len]
+    jne .next
+    lea rdi, [snapshot_member_id]
+    lea rsi, [gateway_bot_user_id]
+    mov edx, eax
+    call equal_bytes
+    test al, al
+    jz .next
+    mov rdi, rbx
+    mov rsi, [snapshot_member_object_end]
+    sub rsi, rdi
+    lea rdx, [key_roles]
+    mov ecx, key_roles_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    cmp byte [rax], '['
+    jne .bad
+    mov [snapshot_bot_roles_start], rax
+    mov rdi, rax
+    mov rsi, [snapshot_member_object_end]
+    call json_array_end
+    test rax, rax
+    jz .bad
+    mov [snapshot_bot_roles_end], rax
+    lea rdi, [r14]
+    mov esi, r15d
+    mov rdx, [snapshot_bot_roles_start]
+    mov rcx, [snapshot_bot_roles_end]
+    sub rcx, rdx
+    call guild_auth_cache_bot_member
+    jmp .out
+.next:
+    mov rbx, [snapshot_member_object_end]
+    jmp .loop
+.done:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    jmp .out
 
 ; RDI=cursor, RSI=exclusive array end. RAX=first non-delimiter cursor.
 snapshot_skip_delimiters:
@@ -571,7 +728,7 @@ auth_clear_guild:
     xor r10d, r10d
 .role_loop:
     cmp r10d, ROLE_SLOT_COUNT
-    jae .out
+    jae .bot_members_start
     imul rax, r10, ROLE_SLOT_SIZE
     lea r9, [role_slots + rax]
     cmp byte [r9], 1
@@ -588,6 +745,27 @@ auth_clear_guild:
 .role_next:
     inc r10d
     jmp .role_loop
+.bot_members_start:
+    xor r10d, r10d
+.bot_member_loop:
+    cmp r10d, BOT_MEMBER_SLOT_COUNT
+    jae .out
+    imul rax, r10, BOT_MEMBER_SLOT_SIZE
+    lea r9, [bot_member_slots + rax]
+    cmp byte [r9], 1
+    jne .bot_member_next
+    cmp r13d, [r9 + 4]
+    jne .bot_member_next
+    lea rdi, [r9 + 16]
+    mov rsi, r12
+    mov edx, r13d
+    call equal_bytes
+    test al, al
+    jz .bot_member_next
+    mov byte [r9], 0
+.bot_member_next:
+    inc r10d
+    jmp .bot_member_loop
 .out:
     pop r13
     pop r12
@@ -678,6 +856,51 @@ guild_auth_roles_permissions:
     pop r14
     pop r13
     pop r12
+    ret
+
+; R12=guild, R13D=len. RAX=existing or first unused bot-member slot, else zero.
+find_bot_member_slot:
+    xor r10d, r10d
+    xor r8d, r8d
+.loop:
+    cmp r10d, BOT_MEMBER_SLOT_COUNT
+    jae .done
+    imul rax, r10, BOT_MEMBER_SLOT_SIZE
+    lea r9, [bot_member_slots + rax]
+    cmp byte [r9], 1
+    jne .empty
+    cmp r13d, [r9 + 4]
+    jne .next
+    lea rdi, [r9 + 16]
+    mov rsi, r12
+    mov edx, r13d
+    call equal_bytes
+    test al, al
+    jnz .found
+.next:
+    inc r10d
+    jmp .loop
+.empty:
+    test r8, r8
+    jnz .next
+    mov r8, r9
+    jmp .next
+.done:
+    mov rax, r8
+    ret
+.found:
+    mov rax, r9
+    ret
+
+; R12=guild, R13D=len. RAX=existing bot-member slot or zero.
+find_existing_bot_member:
+    call find_bot_member_slot
+    test rax, rax
+    jz .out
+    cmp byte [rax], 1
+    je .out
+    xor eax, eax
+.out:
     ret
 
 ; R12=guild, R13D=len. RAX=existing or first unused owner slot, else zero.
@@ -881,6 +1104,103 @@ guild_auth_role_position:
     pop r12
     ret
 
+; RDI=guild, ESI=guild len, RDX=bot roles JSON array, ECX=array len.
+; EAX=0 on a complete bounded cache update, or -1 on invalid/full input.
+guild_auth_cache_bot_member:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    test r15d, r15d
+    jle .bad
+    cmp r13d, ID_CAP - 1
+    ja .bad
+    cmp r15d, BOT_MEMBER_ROLES_CAP - 1
+    ja .bad
+    lea r11, [r14 + r15]
+    mov rdi, r14
+    mov rsi, r11
+    call json_array_end
+    test rax, rax
+    jz .bad
+    cmp rax, r11
+    jne .bad
+    call find_bot_member_slot
+    test rax, rax
+    jz .bad
+    mov r11, rax
+    mov byte [r11], 1
+    mov [r11 + 4], r13d
+    mov [r11 + 8], r15d
+    lea rdi, [r11 + 16]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [r11 + 16 + ID_CAP]
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    mov byte [r11 + 16 + ID_CAP + r15], 0
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=target roles JSON array, ECX=len. AL=1 only
+; when the cached bot member is strictly above the target; absent cache fails closed.
+guild_auth_bot_above_roles:
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .no
+    test r14, r14
+    jz .no
+    test r13d, r13d
+    jle .no
+    test r15d, r15d
+    jle .no
+    call find_existing_bot_member
+    test rax, rax
+    jz .no
+    lea rdi, [r12]
+    mov esi, r13d
+    lea rdx, [rax + 16 + ID_CAP]
+    mov ecx, [rax + 8]
+    mov r8, r14
+    mov r9d, r15d
+    call guild_auth_bot_above_member
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    ret
+
 ; RDI=guild, ESI=guild len, RDX=opening roles JSON array, ECX=array len.
 ; EAX=highest cached role position including @everyone, or -1 for malformed or
 ; incomplete role state. This is a hierarchy primitive, not a permission grant.
@@ -1055,6 +1375,10 @@ key_permissions: db 'permissions'
 key_permissions_len equ $ - key_permissions
 key_position: db 'position'
 key_position_len equ $ - key_position
+key_members: db 'members'
+key_members_len equ $ - key_members
+key_user: db 'user'
+key_user_len equ $ - key_user
 
 section .data
 cached_permission: dq 0
@@ -1071,12 +1395,21 @@ snapshot_role_len: dd 0
 snapshot_permission: dq 0
 snapshot_position: dd 0
 hierarchy_array_end: dq 0
+snapshot_members_start: dq 0
+snapshot_members_end: dq 0
+snapshot_member_object_end: dq 0
+snapshot_user_object_start: dq 0
+snapshot_user_object_end: dq 0
+snapshot_bot_roles_start: dq 0
+snapshot_bot_roles_end: dq 0
 
 section .bss
 owner_slots: resb OWNER_SLOT_COUNT * OWNER_SLOT_SIZE
 role_slots: resb ROLE_SLOT_COUNT * ROLE_SLOT_SIZE
+bot_member_slots: resb BOT_MEMBER_SLOT_COUNT * BOT_MEMBER_SLOT_SIZE
 role_id: resb ID_CAP
 snapshot_guild: resb ID_CAP
 snapshot_owner: resb ID_CAP
 snapshot_role: resb ID_CAP
 snapshot_permission_text: resb 32
+snapshot_member_id: resb ID_CAP
