@@ -7,6 +7,8 @@ global discord_get_json
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
+global discord_lock_channel
+global discord_unlock_channel
 global discord_add_member_role
 
 extern secure_https_post_json
@@ -295,6 +297,122 @@ discord_delete_message:
 .delete_bad:
     mov eax, -1
 .delete_out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=channel ID, ESI=len, RDX=guild ID, ECX=len. EAX=0 on HTTP 2xx.
+discord_lock_channel:
+    mov r8d, 1
+    jmp discord_channel_permission_route
+
+; RDI=channel ID, ESI=len, RDX=guild ID, ECX=len. EAX=0 on HTTP 2xx.
+discord_unlock_channel:
+    xor r8d, r8d
+
+; R8B selects PUT JSON lock (1) or DELETE exact @everyone overwrite (0).
+discord_channel_permission_route:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [channel_permission_mode], r8b
+    test r13d, r13d
+    jz .bad
+    test r15d, r15d
+    jz .bad
+    cmp r13d, 64
+    ja .bad
+    cmp r15d, 64
+    ja .bad
+    cmp dword [discord_token_len], 0
+    je .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov eax, channel_permission_prefix_len
+    add eax, r13d
+    add eax, channel_permission_middle_len
+    add eax, r15d
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    mov [guild_ban_url_len], rax
+    lea rdi, [request_url]
+    lea rsi, [channel_permission_prefix]
+    mov edx, channel_permission_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + channel_permission_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + channel_permission_prefix_len]
+    add rdi, r13
+    lea rsi, [channel_permission_middle]
+    mov edx, channel_permission_middle_len
+    call copy_bytes
+    lea rdi, [request_url + channel_permission_prefix_len]
+    add rdi, r13
+    add rdi, channel_permission_middle_len
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [request_url]
+    add rdi, [guild_ban_url_len]
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    cmp byte [channel_permission_mode], 1
+    jne .delete
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [lock_body]
+    mov ecx, lock_body_len
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_put_json
+    jmp .status
+.delete:
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [response_body]
+    mov ecx, RESPONSE_BODY_CAP
+    lea r8, [response_status]
+    call secure_https_delete
+.status:
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
     pop r15
     pop r14
     pop r13
@@ -817,6 +935,10 @@ url_prefix: db 'https://discord.com/api/v10/channels/'
 url_prefix_len equ $ - url_prefix
 url_suffix: db '/messages'
 url_suffix_len equ $ - url_suffix
+channel_permission_prefix: db 'https://discord.com/api/v10/channels/'
+channel_permission_prefix_len equ $ - channel_permission_prefix
+channel_permission_middle: db '/permissions/'
+channel_permission_middle_len equ $ - channel_permission_middle
 guild_ban_prefix: db 'https://discord.com/api/v10/guilds/'
 guild_ban_prefix_len equ $ - guild_ban_prefix
 guild_ban_middle: db '/bans/'
@@ -837,12 +959,15 @@ json_suffix: db '"}'
 json_suffix_len equ $ - json_suffix
 ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
+lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
+lock_body_len equ $ - lock_body
 
 section .data
 response_status: dq 0
 role_id_ptr: dq 0
 role_id_len: dd 0
 guild_ban_url_len: dq 0
+channel_permission_mode: db 0
 
 section .bss
 request_url: resb REQUEST_URL_CAP

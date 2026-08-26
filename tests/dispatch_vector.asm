@@ -31,6 +31,8 @@ global guild_auth_bot_above_roles
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
+global discord_lock_channel
+global discord_unlock_channel
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -737,6 +739,36 @@ _start:
     jne .fail
     mov byte [bot_permission_enabled], 0
 
+    mov dword [failure_stage], 37
+    mov byte [bot_permission_enabled], 1
+    lea rax, [lock_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], lock_success_response_len
+    lea rdi, [lock_event]
+    mov esi, lock_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [lock_calls], 1
+    jne .fail
+    cmp qword [send_calls], 36
+    jne .fail
+
+    mov dword [failure_stage], 38
+    lea rax, [unlock_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], unlock_success_response_len
+    lea rdi, [unlock_event]
+    mov esi, unlock_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [unlock_calls], 1
+    jne .fail
+    cmp qword [send_calls], 37
+    jne .fail
+    mov byte [bot_permission_enabled], 0
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -1016,7 +1048,7 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
-    mov eax, 4
+    mov eax, 20
     ret
 .deny:
     mov rax, -1
@@ -1049,6 +1081,16 @@ discord_kick_member:
 
 discord_ban_member:
     inc qword [ban_calls]
+    xor eax, eax
+    ret
+
+discord_lock_channel:
+    inc qword [lock_calls]
+    xor eax, eax
+    ret
+
+discord_unlock_channel:
+    inc qword [unlock_calls]
     xor eax, eax
     ret
 
@@ -1413,6 +1455,10 @@ unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"1234567890123
 unknown_event_len equ $ - unknown_event
 unban_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^unban 998877665544332211","author":{"id":"user-2","bot":false}}}'
 unban_event_len equ $ - unban_event
+lock_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^lock","author":{"id":"user-2","bot":false}}}'
+lock_event_len equ $ - lock_event
+unlock_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^unlock","author":{"id":"user-2","bot":false}}}'
+unlock_event_len equ $ - unlock_event
 addword_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^addword BaD","author":{"id":"user-2","bot":false}}}'
 addword_event_len equ $ - addword_event
 words_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^words","author":{"id":"user-2","bot":false}}}'
@@ -1499,6 +1545,10 @@ bot_denied_response: db 'Bot lacks the required effective channel permission.'
 bot_denied_response_len equ $ - bot_denied_response
 unban_success_response: db 'User unbanned.'
 unban_success_response_len equ $ - unban_success_response
+lock_success_response: db 'Channel locked.'
+lock_success_response_len equ $ - lock_success_response
+unlock_success_response: db 'Channel unlocked.'
+unlock_success_response_len equ $ - unlock_success_response
 words_response: db 'Banned words:', 10, '- bad', 10
 words_response_len equ $ - words_response
 word_added_response: db 'Banned word added.'
@@ -1615,6 +1665,8 @@ reply_get_calls: dq 0
 unban_calls: dq 0
 kick_calls: dq 0
 ban_calls: dq 0
+lock_calls: dq 0
+unlock_calls: dq 0
 bot_permission_enabled: db 0
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles

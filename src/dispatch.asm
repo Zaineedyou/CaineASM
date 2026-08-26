@@ -36,6 +36,8 @@ extern guild_auth_bot_above_roles
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
+extern discord_lock_channel
+extern discord_unlock_channel
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -75,6 +77,7 @@ extern discord_get_json
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 %define PERMISSION_BAN_MEMBERS 4
+%define PERMISSION_MANAGE_CHANNELS 16
 
 %define CMD_HELP   1
 %define CMD_RESET  2
@@ -87,6 +90,8 @@ extern discord_get_json
 %define CMD_WARN 9
 %define CMD_KICK 10
 %define CMD_BAN 11
+%define CMD_LOCK 14
+%define CMD_UNLOCK 15
 %define CMD_ADDWORD 17
 %define CMD_REMOVEWORD 18
 %define CMD_WORDS 19
@@ -381,6 +386,10 @@ dispatch_message_create:
     je .kick
     cmp eax, CMD_BAN
     je .ban
+    cmp eax, CMD_LOCK
+    je .lock
+    cmp eax, CMD_UNLOCK
+    je .unlock
     cmp eax, CMD_WARNINGS
     je .warnings
     cmp eax, CMD_CLEARWARN
@@ -1153,6 +1162,45 @@ dispatch_message_create:
 .kick_usage:
     lea rdi, [kick_usage_response]
     mov esi, kick_usage_response_len
+    jmp .reply
+
+.lock:
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    lea rdx, [guild_id]
+    mov ecx, [guild_id_len]
+    call discord_lock_channel
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [lock_success_response]
+    mov esi, lock_success_response_len
+    jmp .reply
+.unlock:
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_CHANNELS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    lea rdx, [guild_id]
+    mov ecx, [guild_id_len]
+    call discord_unlock_channel
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [unlock_success_response]
+    mov esi, unlock_success_response_len
     jmp .reply
 
 .ban:
@@ -2530,6 +2578,10 @@ kick_usage_response: db 'Usage: kick <@user>'
 kick_usage_response_len equ $ - kick_usage_response
 kick_success_response: db 'User kicked.'
 kick_success_response_len equ $ - kick_success_response
+lock_success_response: db 'Channel locked.'
+lock_success_response_len equ $ - lock_success_response
+unlock_success_response: db 'Channel unlocked.'
+unlock_success_response_len equ $ - unlock_success_response
 ban_usage_response: db 'Usage: ban <@user>'
 ban_usage_response_len equ $ - ban_usage_response
 ban_success_response: db 'User banned.'

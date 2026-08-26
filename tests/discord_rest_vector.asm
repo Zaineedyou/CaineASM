@@ -7,6 +7,8 @@ extern discord_get_json
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
+extern discord_lock_channel
+extern discord_unlock_channel
 extern discord_add_member_role
 extern json_escape_append
 
@@ -29,6 +31,12 @@ _start:
     mov qword [mock_status], 201
     mov qword [mock_calls], 0
     mov dword [mock_failure_reason], 0
+    lea rax, [expected_unban_url]
+    mov [expected_put_url_ptr], rax
+    mov dword [expected_put_url_len], expected_unban_url_len
+    lea rax, [ban_body]
+    mov [expected_put_body_ptr], rax
+    mov dword [expected_put_body_len], ban_body_len
     lea rax, [expected_delete_url]
     mov [expected_delete_ptr], rax
     mov dword [expected_delete_len], expected_delete_url_len
@@ -174,6 +182,41 @@ _start:
     cmp qword [put_json_calls], 1
     jne .fail
 
+    mov dword [failure_stage], 757
+    lea rax, [expected_lock_url]
+    mov [expected_put_url_ptr], rax
+    mov dword [expected_put_url_len], expected_lock_url_len
+    lea rax, [lock_body]
+    mov [expected_put_body_ptr], rax
+    mov dword [expected_put_body_len], lock_body_len
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [guild_id]
+    mov ecx, guild_id_len
+    call discord_lock_channel
+    test eax, eax
+    jnz .fail
+    cmp qword [put_json_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 758
+    lea rax, [expected_lock_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_lock_url_len
+    mov qword [delete_status], 204
+    lea rdi, [channel_id]
+    mov esi, channel_id_len
+    lea rdx, [guild_id]
+    mov ecx, guild_id_len
+    call discord_unlock_channel
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 4
+    jne .fail
+    lea rax, [expected_unban_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_unban_url_len
+
     mov dword [failure_stage], 76
     mov qword [delete_status], 403
     lea rdi, [guild_id]
@@ -183,7 +226,7 @@ _start:
     call discord_unban_member
     cmp eax, -1
     jne .fail
-    cmp qword [delete_calls], 4
+    cmp qword [delete_calls], 5
     jne .fail
     mov qword [delete_status], 204
     lea rax, [expected_delete_url]
@@ -400,8 +443,8 @@ secure_https_get:
 ; [RSP+8]=status out.
 secure_https_put_json:
     mov [put_json_body_ptr], rdx
-    lea r10, [expected_unban_url]
-    mov r11d, expected_unban_url_len
+    mov r10, [expected_put_url_ptr]
+    mov r11d, [expected_put_url_len]
     call equal_cstring
     test al, al
     jnz .put_json_url_ok
@@ -417,14 +460,14 @@ secure_https_put_json:
     mov dword [failure_stage], 759
     jmp .put_json_fail
 .put_json_auth_ok:
-    cmp ecx, ban_body_len
+    cmp ecx, [expected_put_body_len]
     je .put_json_body_len_ok
     mov dword [failure_stage], 760
     jmp .put_json_fail
 .put_json_body_len_ok:
     mov rdi, [put_json_body_ptr]
-    lea rsi, [ban_body]
-    mov edx, ban_body_len
+    mov rsi, [expected_put_body_ptr]
+    mov edx, [expected_put_body_len]
     call equal_bytes
     test al, al
     jnz .put_json_body_ok
@@ -564,8 +607,12 @@ expected_unban_url: db 'https://discord.com/api/v10/guilds/123456789012345678/ba
 expected_unban_url_len equ $ - expected_unban_url
 expected_kick_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_kick_url_len equ $ - expected_kick_url
+expected_lock_url: db 'https://discord.com/api/v10/channels/123456789012345678/permissions/123456789012345678'
+expected_lock_url_len equ $ - expected_lock_url
 ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
+lock_body: db '{"type":0,"allow":"0","deny":"2048"}'
+lock_body_len equ $ - lock_body
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_get_url_len equ $ - expected_get_url
 bad_get_url: db 'https://example.invalid/api/v10/guilds/1'
@@ -594,6 +641,10 @@ put_status: dq 0
 put_calls: dq 0
 put_json_calls: dq 0
 put_json_body_ptr: dq 0
+expected_put_url_ptr: dq 0
+expected_put_url_len: dd 0
+expected_put_body_ptr: dq 0
+expected_put_body_len: dd 0
 failure_stage: dd 0
 mock_failure_reason: dd 0
 
