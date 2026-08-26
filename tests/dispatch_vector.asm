@@ -7,6 +7,11 @@ global _start
 global discord_send_text
 global discord_delete_message
 global groq_chat_once
+global groq_vision_once
+global attachment_extract_image_url
+global attachment_copy_image_mime
+global attachment_fetch_https
+global base64_encode
 global groq_select_guild
 global groq_select_history
 global history_clear
@@ -543,6 +548,23 @@ groq_chat_once:
     mov eax, ai_response_len
     ret
 .bad:
+    mov eax, -1
+    ret
+
+; Text fixtures do not carry an image; vision seams reject and dispatch falls back to Groq text.
+attachment_extract_image_url:
+    mov eax, -1
+    ret
+attachment_copy_image_mime:
+    mov eax, -1
+    ret
+attachment_fetch_https:
+    mov eax, -1
+    ret
+base64_encode:
+    mov eax, -1
+    ret
+groq_vision_once:
     mov eax, -1
     ret
 

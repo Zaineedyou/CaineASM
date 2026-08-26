@@ -12,6 +12,11 @@ extern command_classify
 extern discord_send_text
 extern discord_delete_message
 extern groq_chat_once
+extern groq_vision_once
+extern attachment_extract_image_url
+extern attachment_copy_image_mime
+extern attachment_fetch_https
+extern base64_encode
 extern groq_select_guild
 extern groq_select_history
 extern history_clear
@@ -49,6 +54,10 @@ extern bot_prefix_len
 %define HISTORY_KEY_CAP 64
 %define STATE_VIEW_REPLY_CAP 2000
 %define REPORT_LOG_CAP 2000
+%define ATTACHMENT_URL_CAP 1024
+%define ATTACHMENT_MIME_CAP 64
+%define VISION_IMAGE_CAP 11250
+%define VISION_B64_CAP 15000
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 
@@ -389,6 +398,56 @@ dispatch_message_create:
     lea rdi, [guild_id]
     mov esi, [guild_id_len]
     call groq_select_guild
+    ; Vision is accepted only on the existing prefix-triggered AI path.
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [attachment_url]
+    mov ecx, ATTACHMENT_URL_CAP
+    call attachment_extract_image_url
+    test eax, eax
+    jle .chat_text
+    mov [attachment_url_len], eax
+    lea rdi, [attachment_mime]
+    mov esi, ATTACHMENT_MIME_CAP
+    call attachment_copy_image_mime
+    test eax, eax
+    jle .chat_text
+    mov [attachment_mime_len], eax
+    lea rdi, [attachment_url]
+    mov esi, [attachment_url_len]
+    lea rdx, [vision_image]
+    mov ecx, VISION_IMAGE_CAP
+    call attachment_fetch_https
+    test rax, rax
+    jle .chat_text
+    mov [vision_image_len], eax
+    lea rdi, [vision_b64]
+    mov esi, VISION_B64_CAP
+    lea rdx, [vision_image]
+    mov ecx, [vision_image_len]
+    call base64_encode
+    test eax, eax
+    jle .chat_text
+    mov [vision_b64_len], eax
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    test esi, esi
+    jg .vision_prompt
+    lea rdi, [chat_default_prompt]
+    mov esi, chat_default_prompt_len
+.vision_prompt:
+    mov eax, AI_REPLY_CAP
+    push rax
+    lea rax, [ai_reply]
+    push rax
+    lea r8, [vision_b64]
+    mov r9d, [vision_b64_len]
+    lea rdx, [attachment_mime]
+    mov ecx, [attachment_mime_len]
+    call groq_vision_once
+    add rsp, 16
+    jmp .chat_done
+.chat_text:
     mov rdi, [dispatch_tail_ptr]
     mov esi, [dispatch_tail_len]
     test esi, esi
@@ -399,6 +458,7 @@ dispatch_message_create:
     lea rdx, [ai_reply]
     mov ecx, AI_REPLY_CAP
     call groq_chat_once
+.chat_done:
     test eax, eax
     jle .ai_error
     lea rdi, [ai_reply]
@@ -1937,6 +1997,14 @@ default_afk_reason: db 'AFK'
 default_afk_reason_len equ $ - default_afk_reason
 
 section .bss
+attachment_url: resb ATTACHMENT_URL_CAP
+attachment_url_len: resd 1
+attachment_mime: resb ATTACHMENT_MIME_CAP
+attachment_mime_len: resd 1
+vision_image: resb VISION_IMAGE_CAP
+vision_image_len: resd 1
+vision_b64: resb VISION_B64_CAP
+vision_b64_len: resd 1
 channel_id: resb CHANNEL_ID_CAP
 guild_id: resb GUILD_ID_CAP
 author_id: resb AUTHOR_ID_CAP
