@@ -38,6 +38,7 @@ global discord_unlock_channel
 global discord_set_slowmode
 global discord_set_member_timeout
 global discord_clear_member_timeout
+global discord_set_member_nick
 global discord_add_member_role
 global discord_remove_member_role
 global guild_word_add
@@ -1302,6 +1303,80 @@ _start:
     cmp qword [send_calls], 63
     jne .fail
 
+    mov dword [failure_stage], 65
+    mov dword [target_mode], TARGET_VALID
+    mov byte [hierarchy_allowed], 1
+    lea rax, [nick_success_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], nick_success_response_test_len
+    lea rdi, [nick_event]
+    mov esi, nick_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 18
+    jne .fail
+    cmp qword [hierarchy_calls], 12
+    jne .fail
+    cmp qword [nick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 64
+    jne .fail
+
+    mov dword [failure_stage], 66
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [nick_event]
+    mov esi, nick_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 18
+    jne .fail
+    cmp qword [nick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 65
+    jne .fail
+
+    mov dword [failure_stage], 67
+    mov byte [bot_permission_enabled], 1
+    mov byte [hierarchy_allowed], 0
+    lea rax, [hierarchy_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], hierarchy_denied_response_len
+    lea rdi, [nick_event]
+    mov esi, nick_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 19
+    jne .fail
+    cmp qword [hierarchy_calls], 13
+    jne .fail
+    cmp qword [nick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 66
+    jne .fail
+
+    mov dword [failure_stage], 68
+    mov byte [hierarchy_allowed], 1
+    lea rax, [nick_usage_response_test]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], nick_usage_response_test_len
+    lea rdi, [nick_invalid_event]
+    mov esi, nick_invalid_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 19
+    jne .fail
+    cmp qword [nick_calls], 1
+    jne .fail
+    cmp qword [send_calls], 67
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -1615,7 +1690,7 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
-    mov rax, 0x10010000016
+    mov rax, 0x10018000016
     ret
 .deny:
     mov rax, -1
@@ -1768,6 +1843,46 @@ discord_set_member_timeout:
     ret
 .bad:
     mov eax, -1
+    pop r12
+    pop rbx
+    ret
+discord_set_member_nick:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdx
+    mov r12d, ecx
+    mov r13, r8
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, nick_target_len_expected
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [nick_target_expected]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r9d, nick_value_len_expected
+    jne .bad
+    mov rdi, r13
+    lea rsi, [nick_value_expected]
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [nick_calls]
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r13
     pop r12
     pop rbx
     ret
@@ -2251,6 +2366,18 @@ timeout_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1
 timeout_invalid_event_len equ $ - timeout_invalid_event
 untimeout_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^untimeout <@555> trailing","author":{"id":"user-2","bot":false}}}'
 untimeout_invalid_event_len equ $ - untimeout_invalid_event
+nick_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^nick <@555> New Name","author":{"id":"user-2","bot":false}}}'
+nick_event_len equ $ - nick_event
+nick_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^nick <@555>   ","author":{"id":"user-2","bot":false}}}'
+nick_invalid_event_len equ $ - nick_invalid_event
+nick_target_expected: db '555'
+nick_target_len_expected equ $ - nick_target_expected
+nick_value_expected: db 'New Name'
+nick_value_len_expected equ $ - nick_value_expected
+nick_usage_response_test: db 'Usage: nick <@user> <nickname>'
+nick_usage_response_test_len equ $ - nick_usage_response_test
+nick_success_response_test: db 'Nickname changed.'
+nick_success_response_test_len equ $ - nick_success_response_test
 timeout_target_expected: db '555'
 timeout_target_len_expected equ $ - timeout_target_expected
 timeout_usage_response_test: db 'Usage: timeout <@user> <1-40320 minutes> [reason]'
@@ -2506,6 +2633,7 @@ role_add_calls: dq 0
 role_remove_calls: dq 0
 timeout_calls: dq 0
 timeout_clear_calls: dq 0
+nick_calls: dq 0
 role_position_calls: dq 0
 bot_highest_calls: dq 0
 target_get_calls: dq 0

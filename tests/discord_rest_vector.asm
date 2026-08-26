@@ -13,6 +13,7 @@ extern discord_set_slowmode
 extern discord_set_member_timeout
 extern discord_set_member_timeout_at
 extern discord_clear_member_timeout
+extern discord_set_member_nick
 extern discord_add_member_role
 extern discord_remove_member_role
 extern json_escape_append
@@ -424,6 +425,64 @@ _start:
     cmp eax, -1
     jne .fail
     cmp qword [patch_calls], 8
+    jne .fail
+
+    mov dword [failure_stage], 768
+    lea rax, [nick_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], nick_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [nick_value]
+    mov r9d, nick_value_len
+    call discord_set_member_nick
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 9
+    jne .fail
+
+    mov dword [failure_stage], 769
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [nick_too_long]
+    mov r9d, nick_too_long_len
+    call discord_set_member_nick
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 9
+    jne .fail
+
+    mov dword [failure_stage], 770
+    lea rax, [nick_utf8_body]
+    mov [expected_patch_body_ptr], rax
+    mov dword [expected_patch_body_len], nick_utf8_body_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [nick_utf8_value]
+    mov r9d, nick_utf8_value_len
+    call discord_set_member_nick
+    test eax, eax
+    jnz .fail
+    cmp qword [patch_calls], 10
+    jne .fail
+
+    mov dword [failure_stage], 771
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    lea r8, [nick_invalid_utf8]
+    mov r9d, nick_invalid_utf8_len
+    call discord_set_member_nick
+    cmp eax, -1
+    jne .fail
+    cmp qword [patch_calls], 10
     jne .fail
 
     lea rax, [expected_slowmode_url]
@@ -1040,6 +1099,18 @@ timeout_leap_body: db '{"communication_disabled_until":"2024-02-29T23:59:59Z"}'
 timeout_leap_body_len equ $ - timeout_leap_body
 timeout_clear_body: db '{"communication_disabled_until":null}'
 timeout_clear_body_len equ $ - timeout_clear_body
+nick_value: db 'Rin"a'
+nick_value_len equ $ - nick_value
+nick_body: db '{"nick":"Rin', 0x5c, '"a"}'
+nick_body_len equ $ - nick_body
+nick_utf8_value: db 'Ren', 0xc3, 0xa9
+nick_utf8_value_len equ $ - nick_utf8_value
+nick_utf8_body: db '{"nick":"Ren', 0xc3, 0xa9, '"}'
+nick_utf8_body_len equ $ - nick_utf8_body
+nick_too_long: times 33 db 'a'
+nick_too_long_len equ $ - nick_too_long
+nick_invalid_utf8: db 0xc0, 0x80
+nick_invalid_utf8_len equ $ - nick_invalid_utf8
 ban_body: db '{"delete_message_seconds":0}'
 ban_body_len equ $ - ban_body
 lock_body: db '{"type":0,"allow":"0","deny":"2048"}'

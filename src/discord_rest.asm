@@ -13,6 +13,7 @@ global discord_set_slowmode
 global discord_set_member_timeout
 global discord_set_member_timeout_at
 global discord_clear_member_timeout
+global discord_set_member_nick
 global discord_add_member_role
 global discord_remove_member_role
 
@@ -39,6 +40,8 @@ extern discord_token_len
 %define SYS_TIME 201
 %define TIMEOUT_MAX_MINUTES 40320
 %define TIMEOUT_BODY_CAP 64
+%define NICK_BYTES_MAX 128
+%define NICK_CHARS_MAX 32
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -412,6 +415,230 @@ discord_set_member_timeout_at:
     pop r13
     pop r12
     pop rbx
+    ret
+; RDI=guild, ESI=guild len, RDX=user, ECX=user len, R8=nick bytes, R9D=len.
+; EAX=0 only on HTTP 2xx. UTF-8 validation and JSON construction remain NASM.
+discord_set_member_nick:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [nick_ptr], r8
+    mov [nick_len], r9d
+    test r8, r8
+    jz .bad
+    test r9d, r9d
+    jle .bad
+    cmp r9d, NICK_BYTES_MAX
+    ja .bad
+    mov rdi, r8
+    mov esi, r9d
+    call validate_nick_utf8
+    test eax, eax
+    js .bad
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r14
+    mov ecx, r15d
+    call discord_build_member_patch_route
+    test eax, eax
+    js .bad
+    lea rdi, [json_body]
+    lea rsi, [nick_body_prefix]
+    mov edx, nick_body_prefix_len
+    call copy_bytes
+    lea rdi, [json_body + nick_body_prefix_len]
+    mov esi, JSON_BODY_CAP - nick_body_prefix_len - nick_body_suffix_len
+    mov rdx, [nick_ptr]
+    mov ecx, [nick_len]
+    call json_escape_append
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    lea rdi, [json_body + nick_body_prefix_len]
+    add rdi, rbx
+    lea rsi, [nick_body_suffix]
+    mov edx, nick_body_suffix_len
+    call copy_bytes
+    mov eax, ebx
+    add eax, nick_body_prefix_len + nick_body_suffix_len
+    lea rdi, [json_body]
+    mov byte [rdi + rax], 0
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [json_body]
+    mov ecx, eax
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_patch_json
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; RDI=nick bytes, ESI=len. EAX=1..32 characters or -1. It rejects controls,
+; overlong sequences, surrogate code points, and Unicode beyond U+10FFFF.
+validate_nick_utf8:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    cmp esi, NICK_BYTES_MAX
+    ja .bad
+    xor ecx, ecx
+    xor edx, edx
+.next:
+    cmp edx, esi
+    jae .done
+    movzx eax, byte [rdi + rdx]
+    cmp al, 0x20
+    jb .bad
+    cmp al, 0x7f
+    je .bad
+    cmp al, 0x80
+    jb .ascii
+    cmp al, 0xc2
+    jb .bad
+    cmp al, 0xdf
+    jbe .two
+    cmp al, 0xe0
+    je .three_e0
+    cmp al, 0xed
+    je .three_ed
+    cmp al, 0xef
+    jbe .three
+    cmp al, 0xf0
+    je .four_f0
+    cmp al, 0xf4
+    je .four_f4
+    cmp al, 0xf1
+    jb .bad
+    cmp al, 0xf3
+    jbe .four
+    jmp .bad
+.ascii:
+    inc edx
+    jmp .char
+.two:
+    lea eax, [rdx + 1]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    add edx, 2
+    jmp .char
+.three_e0:
+    lea eax, [rdx + 2]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0xa0
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    jmp .three_last
+.three_ed:
+    lea eax, [rdx + 2]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0x9f
+    ja .bad
+    jmp .three_last
+.three:
+    lea eax, [rdx + 2]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+.three_last:
+    movzx eax, byte [rdi + rdx + 2]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    add edx, 3
+    jmp .char
+.four_f0:
+    lea eax, [rdx + 3]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x90
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    jmp .four_last
+.four_f4:
+    lea eax, [rdx + 3]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0x8f
+    ja .bad
+    jmp .four_last
+.four:
+    lea eax, [rdx + 3]
+    cmp eax, esi
+    jae .bad
+    movzx eax, byte [rdi + rdx + 1]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+.four_last:
+    movzx eax, byte [rdi + rdx + 2]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    movzx eax, byte [rdi + rdx + 3]
+    cmp al, 0x80
+    jb .bad
+    cmp al, 0xbf
+    ja .bad
+    add edx, 4
+    jmp .char
+.char:
+    inc ecx
+    cmp ecx, NICK_CHARS_MAX
+    ja .bad
+    jmp .next
+.done:
+    test ecx, ecx
+    jz .bad
+    mov eax, ecx
+    ret
+.bad:
+    mov eax, -1
     ret
 ; RDI=guild, ESI=guild len, RDX=user, ECX=user len. EAX=0 only on HTTP 2xx.
 discord_clear_member_timeout:
@@ -1642,6 +1869,10 @@ timeout_body_suffix: db '"}'
 timeout_body_suffix_len equ $ - timeout_body_suffix
 timeout_clear_body: db '{"communication_disabled_until":null}'
 timeout_clear_body_len equ $ - timeout_clear_body
+nick_body_prefix: db '{"nick":"'
+nick_body_prefix_len equ $ - nick_body_prefix
+nick_body_suffix: db '"}'
+nick_body_suffix_len equ $ - nick_body_suffix
 
 section .data
 response_status: dq 0
@@ -1656,6 +1887,8 @@ timestamp_hour: dd 0
 timestamp_minute: dd 0
 timestamp_second: dd 0
 timeout_expiry_epoch: dq 0
+nick_ptr: dq 0
+nick_len: dd 0
 audit_reason_ptr: dq 0
 audit_reason_len: dd 0
 section .bss

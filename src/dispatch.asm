@@ -43,6 +43,7 @@ extern discord_unlock_channel
 extern discord_set_slowmode
 extern discord_set_member_timeout
 extern discord_clear_member_timeout
+extern discord_set_member_nick
 extern discord_add_member_role
 extern discord_remove_member_role
 extern guild_word_add
@@ -86,6 +87,7 @@ extern discord_get_json
 %define PERMISSION_BAN_MEMBERS 4
 %define PERMISSION_MANAGE_CHANNELS 16
 %define PERMISSION_MANAGE_ROLES 0x10000000
+%define PERMISSION_MANAGE_NICKNAMES 0x8000000
 %define PERMISSION_MODERATE_MEMBERS 0x10000000000
 
 %define CMD_HELP   1
@@ -410,6 +412,8 @@ dispatch_message_create:
     je .timeout
     cmp eax, CMD_UNTIMEOUT
     je .untimeout
+    cmp eax, CMD_NICK
+    je .nick
     cmp eax, CMD_ROLE
     je .role
     cmp eax, CMD_WARNINGS
@@ -1327,6 +1331,42 @@ dispatch_message_create:
 .untimeout_usage:
     lea rdi, [untimeout_usage_response]
     mov esi, untimeout_usage_response_len
+    jmp .reply
+.nick:
+    mov r8, PERMISSION_MANAGE_NICKNAMES
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_NICKNAMES
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_parse_nick_command
+    test eax, eax
+    jle .nick_usage
+    lea rdi, [nick_target]
+    mov esi, [nick_target_len]
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [nick_target]
+    mov ecx, [nick_target_len]
+    lea r8, [nick_value]
+    mov r9d, [nick_value_len]
+    call discord_set_member_nick
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [nick_success_response]
+    mov esi, nick_success_response_len
+    jmp .reply
+.nick_usage:
+    lea rdi, [nick_usage_response]
+    mov esi, nick_usage_response_len
     jmp .reply
 .role:
     mov r8, PERMISSION_MANAGE_ROLES
@@ -2476,6 +2516,123 @@ dispatch_parse_untimeout_command:
     pop r12
     pop rbx
     ret
+; RDI=tail bytes, ESI=len. EAX=nickname bytes or -1. Accepts only
+; `<@user> <nickname>` ordered tokens, trimming only ASCII token whitespace;
+; UTF-8, character count, controls, and JSON escaping are enforced by REST NASM.
+dispatch_parse_nick_command:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov dword [nick_target_len], 0
+    mov dword [nick_value_len], 0
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    xor ebx, ebx
+    cmp byte [r12 + rbx], '<'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '@'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '!'
+    jne .digits_start
+    inc ebx
+.digits_start:
+    xor r14d, r14d
+.digits:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, '>'
+    je .target_done
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp r14d, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov [nick_target + r14], al
+    inc r14d
+    inc ebx
+    jmp .digits
+.target_done:
+    test r14d, r14d
+    jz .bad
+    mov [nick_target_len], r14d
+    inc ebx
+.leading:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .lead_next
+    cmp al, 9
+    je .lead_next
+    cmp al, 10
+    je .lead_next
+    cmp al, 13
+    je .lead_next
+    jmp .copy_start
+.lead_next:
+    inc ebx
+    jmp .leading
+.copy_start:
+    mov r14d, ebx
+    mov r15d, r13d
+.trailing:
+    cmp r15d, r14d
+    jbe .bad
+    mov al, [r12 + r15 - 1]
+    cmp al, ' '
+    je .trim_last
+    cmp al, 9
+    je .trim_last
+    cmp al, 10
+    je .trim_last
+    cmp al, 13
+    jne .copy
+.trim_last:
+    dec r15d
+    jmp .trailing
+.copy:
+    mov eax, r15d
+    sub eax, r14d
+    test eax, eax
+    jle .bad
+    cmp eax, 128
+    ja .bad
+    xor ecx, ecx
+.copy_loop:
+    cmp ecx, eax
+    jae .done
+    mov edx, r14d
+    add edx, ecx
+    mov dl, [r12 + rdx]
+    mov [nick_value + rcx], dl
+    inc ecx
+    jmp .copy_loop
+.done:
+    mov [nick_value_len], eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=tail bytes, ESI=len, DL='#' for <#id> or '&' for <@&id>.
 ; EAX=extracted decimal ID len, or -1. The ID is copied into config_value.
 dispatch_extract_mention_id:
@@ -3266,6 +3423,10 @@ untimeout_usage_response: db 'Usage: untimeout <@user>'
 untimeout_usage_response_len equ $ - untimeout_usage_response
 untimeout_success_response: db 'User timeout removed.'
 untimeout_success_response_len equ $ - untimeout_success_response
+nick_usage_response: db 'Usage: nick <@user> <nickname>'
+nick_usage_response_len equ $ - nick_usage_response
+nick_success_response: db 'Nickname changed.'
+nick_success_response_len equ $ - nick_success_response
 role_command_usage_response: db 'Usage: role add|remove <@user> <@&role>'
 role_command_usage_response_len equ $ - role_command_usage_response
 role_add_success_response: db 'Role added.'
@@ -3353,6 +3514,10 @@ moderation_reason_len: resd 1
 timeout_target_len: resd 1
 timeout_minutes: resd 1
 timeout_target: resb AUTHOR_ID_CAP
+nick_target_len: resd 1
+nick_value_len: resd 1
+nick_target: resb AUTHOR_ID_CAP
+nick_value: resb 128
 role_target_len: resd 1
 role_requested_len: resd 1
 role_action: resd 1
