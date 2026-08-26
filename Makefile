@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/history.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -23,8 +23,9 @@ GUILD_POLICY_TEST := $(BUILD_DIR)/guild-policy-vector
 GUILD_AUTH_TEST := $(BUILD_DIR)/guild-auth-vector
 LIFECYCLE_TEST := $(BUILD_DIR)/lifecycle-vector
 WARNINGS_TEST := $(BUILD_DIR)/warnings-vector
+HISTORY_TEST := $(BUILD_DIR)/history-vector
 
-.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test
+.PHONY: all clean inspect source-ratio test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history test
 
 all: $(BINARY)
 
@@ -68,6 +69,9 @@ $(BUILD_DIR)/lifecycle.o: src/lifecycle.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/warnings.o: src/warnings.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/history.o: src/history.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/store.o: src/store.asm | $(BUILD_DIR)
@@ -235,7 +239,16 @@ $(WARNINGS_TEST): $(BUILD_DIR)/warnings-vector.o $(BUILD_DIR)/warnings.o $(BUILD
 test-warnings: $(WARNINGS_TEST)
 	./$(WARNINGS_TEST)
 
-test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings
+$(BUILD_DIR)/history-vector.o: tests/history_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(HISTORY_TEST): $(BUILD_DIR)/history-vector.o $(BUILD_DIR)/history.o
+	ld -static -z noexecstack -o $@ $^
+
+test-history: $(HISTORY_TEST)
+	./$(HISTORY_TEST)
+
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-lifecycle test-warnings test-history
 
 inspect: $(BINARY)
 	file $(BINARY)
