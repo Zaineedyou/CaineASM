@@ -2,6 +2,7 @@ BITS 64
 DEFAULT REL
 
 global groq_chat_once
+global groq_vision_once
 global groq_select_guild
 global groq_select_history
 
@@ -9,6 +10,7 @@ extern secure_https_post_json
 extern groq_key_ptr
 extern groq_key_len
 extern json_escape_append
+extern vision_build_payload
 extern json_find_key
 extern json_read_string
 extern guild_config_get
@@ -20,7 +22,9 @@ extern history_append
 %define GROQ_PROMPT_MAX 1800
 %define GROQ_REPLY_MAX 1900
 %define GROQ_AUTH_CAP 512
-%define GROQ_BODY_CAP 4096
+%define GROQ_BODY_CAP 16384
+%define GROQ_VISION_B64_MAX 15000
+%define GROQ_VISION_MIME_MAX 63
 %define GROQ_RESPONSE_CAP 8192
 %define GROQ_RETRIES 3
 %define GROQ_HISTORY_MAX 2
@@ -181,6 +185,166 @@ groq_chat_once:
     cmp rax, 500
     jb .bad
 .retryable:
+    inc r12d
+    cmp r12d, GROQ_RETRIES
+    jae .bad
+    lea rdi, [retry_pause]
+    xor esi, esi
+    mov eax, SYS_NANOSLEEP
+    syscall
+    jmp .retry
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=prompt, ESI=len, RDX=mime, ECX=mime len, R8=base64, R9D=base64 len.
+; Stack: [RSP+8]=reply destination, [RSP+16]=reply capacity.
+; EAX=decoded reply length, or -1. History is committed only on response success.
+groq_vision_once:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov [vision_mime_ptr], rdx
+    mov [vision_mime_len], ecx
+    mov [vision_b64_ptr], r8
+    mov [vision_b64_len], r9d
+    mov [current_prompt_ptr], r12
+    mov [current_prompt_len], r13d
+    mov r14, [rsp + 48]
+    mov r15d, [rsp + 56]
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    js .bad
+    cmp r13d, GROQ_PROMPT_MAX
+    ja .bad
+    cmp qword [vision_mime_ptr], 0
+    je .bad
+    cmp dword [vision_mime_len], 1
+    jl .bad
+    cmp dword [vision_mime_len], GROQ_VISION_MIME_MAX
+    ja .bad
+    cmp qword [vision_b64_ptr], 0
+    je .bad
+    cmp dword [vision_b64_len], 1
+    jl .bad
+    cmp dword [vision_b64_len], GROQ_VISION_B64_MAX
+    ja .bad
+    test r14, r14
+    jz .bad
+    cmp r15d, 2
+    jb .bad
+    cmp r15d, GROQ_REPLY_MAX + 1
+    ja .bad
+    mov rbx, [groq_key_ptr]
+    mov eax, [groq_key_len]
+    test rbx, rbx
+    jz .bad
+    test eax, eax
+    jz .bad
+    cmp eax, GROQ_AUTH_CAP - authorization_prefix_len - 1
+    ja .bad
+    mov rdi, rbx
+    mov esi, eax
+    call header_value_safe
+    test al, al
+    jz .bad
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, rbx
+    mov edx, [groq_key_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    ; Build exact multimodal body entirely in NASM.
+    mov eax, r13d
+    push rax
+    push r12
+    mov eax, [vision_b64_len]
+    push rax
+    mov rax, [vision_b64_ptr]
+    push rax
+    lea rdi, [request_body]
+    mov esi, GROQ_BODY_CAP
+    mov rdx, [selected_persona_ptr]
+    mov ecx, [selected_persona_len]
+    mov r8, [vision_mime_ptr]
+    mov r9d, [vision_mime_len]
+    call vision_build_payload
+    add rsp, 32
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    mov [request_body_len], eax
+    xor r12d, r12d
+.retry:
+    lea rdi, [groq_url]
+    lea rsi, [authorization]
+    lea rdx, [request_body]
+    mov ecx, ebx
+    lea r8, [response_body]
+    mov r9, GROQ_RESPONSE_CAP
+    call groq_secure_post
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .retry_status
+    cmp rax, 300
+    jae .retry_status
+    lea rdi, [response_body]
+    mov rsi, [response_length]
+    lea rdx, [key_content]
+    mov ecx, key_content_len
+    call json_find_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    lea rsi, [response_body]
+    add rsi, [response_length]
+    mov rdx, r14
+    mov ecx, r15d
+    dec ecx
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov byte [r14 + rax], 0
+    mov [last_reply_len], eax
+    ; Keep the bounded source-compatible marker, then commit only after success.
+    lea rdi, [vision_history_marker]
+    lea rsi, [vision_history_prefix]
+    mov edx, vision_history_prefix_len
+    call copy_bytes
+    lea rdi, [vision_history_marker + vision_history_prefix_len]
+    mov rsi, [current_prompt_ptr]
+    mov edx, [current_prompt_len]
+    call copy_bytes
+    lea rax, [vision_history_marker]
+    mov [current_prompt_ptr], rax
+    mov eax, r13d
+    add eax, vision_history_prefix_len
+    mov [current_prompt_len], eax
+    call groq_store_history
+    mov eax, [last_reply_len]
+    jmp .out
+.retry_status:
+    cmp rax, 429
+    je .retry_wait
+    cmp rax, 500
+    jb .bad
+.retry_wait:
     inc r12d
     cmp r12d, GROQ_RETRIES
     jae .bad
@@ -456,6 +620,8 @@ copy_bytes:
     ret
 
 section .rodata
+vision_history_prefix: db '[kirim gambar] '
+vision_history_prefix_len equ $ - vision_history_prefix
 groq_url: db 'https://api.groq.com/openai/v1/chat/completions',0
 authorization_prefix: db 'Authorization: Bearer '
 authorization_prefix_len equ $ - authorization_prefix
@@ -504,6 +670,10 @@ selected_history_key_len: dd 0
 current_prompt_ptr: dq 0
 current_prompt_len: dd 0
 last_reply_len: dd 0
+vision_mime_ptr: dq 0
+vision_mime_len: dd 0
+vision_b64_ptr: dq 0
+vision_b64_len: dd 0
 history_role_ptr: dq 0
 history_role_len: dd 0
 
@@ -511,3 +681,4 @@ section .bss
 authorization: resb GROQ_AUTH_CAP
 request_body: resb GROQ_BODY_CAP
 response_body: resb GROQ_RESPONSE_CAP
+vision_history_marker: resb GROQ_PROMPT_MAX + 16
