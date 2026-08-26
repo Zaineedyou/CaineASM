@@ -427,10 +427,60 @@ groq_select_guild:
     ja .done
     mov [selected_persona_ptr], rax
     mov [selected_persona_len], edx
+.history_limit:
+    mov rdi, r12
+    mov esi, r13d
+    lea rdx, [setting_history]
+    mov ecx, setting_history_len
+    call guild_config_get
+    test rax, rax
+    jz .done
+    test edx, edx
+    jle .done
+    mov rdi, rax
+    mov esi, edx
+    call groq_parse_history_limit
+    test eax, eax
+    jle .done
+    mov [selected_history_limit], eax
 .done:
     xor eax, eax
     pop r13
     pop r12
+    ret
+
+; RDI=decimal bytes, ESI=len. EAX=5..32, or -1.
+groq_parse_history_limit:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    cmp esi, 3
+    ja .bad
+    xor eax, eax
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .range
+    movzx edx, byte [rdi + rcx]
+    sub edx, '0'
+    cmp edx, 9
+    ja .bad
+    imul eax, eax, 10
+    add eax, edx
+    inc ecx
+    jmp .loop
+.range:
+    cmp eax, 5
+    jb .bad
+    cmp eax, GROQ_HISTORY_SAFE_MAX
+    ja .clamp
+    ret
+.clamp:
+    mov eax, GROQ_HISTORY_SAFE_MAX
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; history_visit_recent callback. RDI=role, ESI=role len, RDX=content, ECX=content len.
@@ -651,6 +701,8 @@ setting_model: db 'model'
 setting_model_len equ $ - setting_model
 setting_persona: db 'system_prompt'
 setting_persona_len equ $ - setting_persona
+setting_history: db 'max_history'
+setting_history_len equ $ - setting_history
 default_model: db 'llama-3.3-70b-versatile'
 default_model_len equ $ - default_model
 default_persona: db 'You are CaineASM, a concise Discord assistant.'
