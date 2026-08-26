@@ -28,6 +28,8 @@ global guild_auth_roles_have
 global channel_auth_resolve
 global guild_auth_get_bot_roles
 global guild_auth_bot_above_roles
+global guild_auth_role_position
+global guild_auth_member_highest_position
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -895,10 +897,251 @@ _start:
     jne .fail
     cmp qword [send_calls], 44
     jne .fail
+        mov dword [target_mode], TARGET_NONE
+    ; Role uses ordered mention parsing plus caller/bot effective permission,
+    ; one target-member GET, strict target hierarchy, and strict requested-role
+    ; hierarchy before it can issue either REST mutation.
+    mov dword [failure_stage], 46
+    mov byte [bot_permission_enabled], 1
+    mov dword [target_mode], TARGET_VALID
+    mov byte [hierarchy_allowed], 1
+    mov dword [role_position_value], 5
+    mov dword [bot_highest_position], 10
+    lea rax, [role_add_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], role_add_success_response_len
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 5
+    jne .fail
+    cmp qword [hierarchy_calls], 3
+    jne .fail
+    cmp qword [role_position_calls], 1
+    jne .fail
+    cmp qword [bot_highest_calls], 1
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 0
+    jne .fail
+    cmp qword [send_calls], 45
+    jne .fail
+
+    mov dword [failure_stage], 47
+    lea rax, [role_remove_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], role_remove_success_response_len
+    lea rdi, [role_remove_event]
+    mov esi, role_remove_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 6
+    jne .fail
+    cmp qword [hierarchy_calls], 4
+    jne .fail
+    cmp qword [role_position_calls], 2
+    jne .fail
+    cmp qword [bot_highest_calls], 2
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 46
+    jne .fail
+
+    mov dword [failure_stage], 48
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 6
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 47
+    jne .fail
+
+    mov dword [failure_stage], 49
+    mov byte [bot_permission_enabled], 1
+    mov byte [hierarchy_allowed], 0
+    lea rax, [hierarchy_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], hierarchy_denied_response_len
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 7
+    jne .fail
+    cmp qword [hierarchy_calls], 5
+    jne .fail
+    cmp qword [role_position_calls], 2
+    jne .fail
+    cmp qword [bot_highest_calls], 2
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 48
+    jne .fail
+
+    mov dword [failure_stage], 50
+    mov byte [hierarchy_allowed], 1
+    mov dword [target_mode], TARGET_MALFORMED
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 8
+    jne .fail
+    cmp qword [hierarchy_calls], 5
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 49
+    jne .fail
+
+    mov dword [failure_stage], 51
+    mov dword [target_mode], TARGET_ERROR
+    lea rdi, [role_remove_event]
+    mov esi, role_remove_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 9
+    jne .fail
+    cmp qword [hierarchy_calls], 5
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 50
+    jne .fail
+
+    mov dword [failure_stage], 52
+    mov dword [target_mode], TARGET_VALID
+    mov dword [role_position_value], 10
+    mov dword [bot_highest_position], 10
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 10
+    jne .fail
+    cmp qword [hierarchy_calls], 6
+    jne .fail
+    cmp qword [role_position_calls], 3
+    jne .fail
+    cmp qword [bot_highest_calls], 3
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 51
+    jne .fail
+
+    mov dword [failure_stage], 53
+    mov dword [role_position_value], 11
+    mov dword [bot_highest_position], 10
+    lea rdi, [role_remove_event]
+    mov esi, role_remove_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 11
+    jne .fail
+    cmp qword [hierarchy_calls], 7
+    jne .fail
+    cmp qword [role_position_calls], 4
+    jne .fail
+    cmp qword [bot_highest_calls], 4
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 52
+    jne .fail
+
+    mov dword [failure_stage], 54
+    mov dword [role_position_value], -1
+    lea rdi, [role_add_event]
+    mov esi, role_add_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 12
+    jne .fail
+    cmp qword [hierarchy_calls], 8
+    jne .fail
+    cmp qword [role_position_calls], 5
+    jne .fail
+    cmp qword [bot_highest_calls], 4
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 53
+    jne .fail
+
+    mov dword [failure_stage], 55
+    lea rax, [role_command_usage_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], role_command_usage_response_len
+    lea rdi, [role_invalid_action_event]
+    mov esi, role_invalid_action_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 12
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 54
+    jne .fail
+
+    mov dword [failure_stage], 56
+    lea rdi, [role_malformed_mention_event]
+    mov esi, role_malformed_mention_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [target_get_calls], 12
+    jne .fail
+    cmp qword [role_add_calls], 1
+    jne .fail
+    cmp qword [role_remove_calls], 1
+    jne .fail
+    cmp qword [send_calls], 55
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
-
     mov eax, SYS_EXIT
+
     xor edi, edi
     syscall
 .fail:
@@ -1208,17 +1451,75 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
-    mov eax, 22
+    mov rax, 0x10000016
     ret
 .deny:
     mov rax, -1
     ret
 
+; Requested role lookup must receive the exact guild and ordered role mention.
 guild_auth_role_position:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, role_rest_requested_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [role_rest_requested]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [role_position_calls]
+    mov eax, [role_position_value]
+    jmp .out
+.bad:
     mov eax, -1
+.out:
+    pop r12
+    pop rbx
     ret
-
+; The dispatcher asks this helper only for cached bot roles after target
+; hierarchy and requested-role presence have passed.
+guild_auth_member_highest_position:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12d, ecx
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, bot_roles_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [bot_roles]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [bot_highest_calls]
+    mov eax, [bot_highest_position]
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r12
+    pop rbx
+    ret
 guild_auth_bot_above_roles:
+
     inc qword [hierarchy_calls]
     movzx eax, byte [hierarchy_allowed]
     ret
@@ -1265,14 +1566,70 @@ discord_set_slowmode:
     ret
 
 discord_add_member_role:
+    call assert_role_rest_args
+    test eax, eax
+    jnz .bad
     inc qword [role_add_calls]
     xor eax, eax
     ret
-
+.bad:
+    mov eax, -1
+    ret
 discord_remove_member_role:
+    call assert_role_rest_args
+    test eax, eax
+    jnz .bad
     inc qword [role_remove_calls]
     xor eax, eax
     ret
+.bad:
+    mov eax, -1
+    ret
+; RDI=guild, ESI=len, RDX=target, ECX=len, R8=requested role, R9D=len.
+; Shared assertion proves destructive calls receive exact, unswapped IDs.
+assert_role_rest_args:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov rbx, rdx
+    mov r12d, ecx
+    mov r13, r8
+    mov r14d, r9d
+    cmp esi, guild_id_len
+    jne .bad
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, role_rest_target_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [role_rest_target]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r14d, role_rest_requested_len
+    jne .bad
+    mov rdi, r13
+    lea rsi, [role_rest_requested]
+    mov edx, r14d
+    call equal_bytes
+    test al, al
+    jz .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 
 guild_auth_roles_have:
     xor eax, eax
@@ -1647,6 +2004,14 @@ kick_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","c
 kick_target_event_len equ $ - kick_target_event
 ban_target_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^ban <@555>","author":{"id":"user-2","bot":false}}}'
 ban_target_event_len equ $ - ban_target_event
+role_add_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role add <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'
+role_add_event_len equ $ - role_add_event
+role_remove_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role remove <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'
+role_remove_event_len equ $ - role_remove_event
+role_invalid_action_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role destroy <@555> <@&1001>","author":{"id":"user-2","bot":false}}}'
+role_invalid_action_event_len equ $ - role_invalid_action_event
+role_malformed_mention_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^role add <@555> <@1001>","author":{"id":"user-2","bot":false}}}'
+role_malformed_mention_event_len equ $ - role_malformed_mention_event
 target_expected_url: db 'https://discord.com/api/v10/guilds/guild-1/members/555'
 target_expected_url_len equ $ - target_expected_url
 target_valid_response: db '{"roles":["1001"]}'
@@ -1749,6 +2114,16 @@ slowmode_usage_response: db 'Usage: slowmode <0-21600>'
 slowmode_usage_response_len equ $ - slowmode_usage_response
 kick_success_response: db 'User kicked.'
 kick_success_response_len equ $ - kick_success_response
+role_command_usage_response: db 'Usage: role add|remove <@user> <@&role>'
+role_command_usage_response_len equ $ - role_command_usage_response
+role_add_success_response: db 'Role added.'
+role_add_success_response_len equ $ - role_add_success_response
+role_remove_success_response: db 'Role removed.'
+role_remove_success_response_len equ $ - role_remove_success_response
+role_rest_target: db '555'
+role_rest_target_len equ $ - role_rest_target
+role_rest_requested: db '1001'
+role_rest_requested_len equ $ - role_rest_requested
 hierarchy_denied_response: db 'Bot cannot moderate this target due to role hierarchy or incomplete member state.'
 hierarchy_denied_response_len equ $ - hierarchy_denied_response
 words_response: db 'Banned words:', 10, '- bad', 10
@@ -1872,10 +2247,14 @@ unlock_calls: dq 0
 slowmode_calls: dq 0
 role_add_calls: dq 0
 role_remove_calls: dq 0
+role_position_calls: dq 0
+bot_highest_calls: dq 0
 target_get_calls: dq 0
 hierarchy_calls: dq 0
 target_mode: dd TARGET_NONE
 hierarchy_allowed: db 0
 bot_permission_enabled: db 0
+role_position_value: dd -1
+bot_highest_position: dd -1
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles

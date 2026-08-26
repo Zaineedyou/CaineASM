@@ -34,6 +34,7 @@ extern channel_auth_resolve
 extern guild_auth_get_bot_roles
 extern guild_auth_bot_above_roles
 extern guild_auth_role_position
+extern guild_auth_member_highest_position
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -400,6 +401,8 @@ dispatch_message_create:
     je .unlock
     cmp eax, CMD_SLOWMODE
     je .slowmode
+    cmp eax, CMD_ROLE
+    je .role
     cmp eax, CMD_WARNINGS
     je .warnings
     cmp eax, CMD_CLEARWARN
@@ -1239,6 +1242,75 @@ dispatch_message_create:
     mov esi, slowmode_usage_response_len
     jmp .reply
 
+.role:
+    mov r8, PERMISSION_MANAGE_ROLES
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_ROLES
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_parse_role_command
+    test eax, eax
+    jle .role_command_usage
+    lea rdi, [role_target]
+    mov esi, [role_target_len]
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [role_requested]
+    mov ecx, [role_requested_len]
+    call guild_auth_role_position
+    test eax, eax
+    js .hierarchy_denied
+    mov [role_requested_position], eax
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call guild_auth_get_bot_roles
+    test rax, rax
+    jz .hierarchy_denied
+    test edx, edx
+    jle .hierarchy_denied
+    mov rcx, rdx
+    mov rdx, rax
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call guild_auth_member_highest_position
+    test eax, eax
+    js .hierarchy_denied
+    cmp eax, [role_requested_position]
+    jle .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [role_target]
+    mov ecx, [role_target_len]
+    lea r8, [role_requested]
+    mov r9d, [role_requested_len]
+    cmp dword [role_action], 1
+    je .role_add
+    call discord_remove_member_role
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [role_remove_success_response]
+    mov esi, role_remove_success_response_len
+    jmp .reply
+.role_add:
+    call discord_add_member_role
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [role_add_success_response]
+    mov esi, role_add_success_response_len
+    jmp .reply
+.role_command_usage:
+    lea rdi, [role_command_usage_response]
+    mov esi, role_command_usage_response_len
+    jmp .reply
 .ban:
     mov r8, PERMISSION_BAN_MEMBERS
     call dispatch_has_permission
@@ -1897,6 +1969,225 @@ dispatch_tail_after_mention:
     xor esi, esi
     ret
 
+; RDI=tail bytes, ESI=len. EAX=1 (add), 2 (remove), or -1.
+; Accepts only: role add|remove <@user> <@&role>, with optional ASCII
+; whitespace between ordered tokens and after the final mention. The separate
+; fixed buffers avoid the generic mention parser's config_value overwrite.
+dispatch_parse_role_command:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov dword [role_target_len], 0
+    mov dword [role_requested_len], 0
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, 4
+    jb .try_remove
+    mov al, [r12]
+    or al, 0x20
+    cmp al, 'a'
+    jne .try_remove
+    mov al, [r12 + 1]
+    or al, 0x20
+    cmp al, 'd'
+    jne .try_remove
+    mov al, [r12 + 2]
+    or al, 0x20
+    cmp al, 'd'
+    jne .try_remove
+    mov ebx, 3
+    mov dword [role_action], 1
+    jmp .action_boundary
+.try_remove:
+    cmp r13d, 7
+    jb .bad
+    mov al, [r12]
+    or al, 0x20
+    cmp al, 'r'
+    jne .bad
+    mov al, [r12 + 1]
+    or al, 0x20
+    cmp al, 'e'
+    jne .bad
+    mov al, [r12 + 2]
+    or al, 0x20
+    cmp al, 'm'
+    jne .bad
+    mov al, [r12 + 3]
+    or al, 0x20
+    cmp al, 'o'
+    jne .bad
+    mov al, [r12 + 4]
+    or al, 0x20
+    cmp al, 'v'
+    jne .bad
+    mov al, [r12 + 5]
+    or al, 0x20
+    cmp al, 'e'
+    jne .bad
+    mov ebx, 6
+    mov dword [role_action], 2
+.action_boundary:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .skip_user_ws
+    cmp al, 9
+    je .skip_user_ws
+    cmp al, 10
+    je .skip_user_ws
+    cmp al, 13
+    jne .bad
+.skip_user_ws:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .advance_user_ws
+    cmp al, 9
+    je .advance_user_ws
+    cmp al, 10
+    je .advance_user_ws
+    cmp al, 13
+    je .advance_user_ws
+    jmp .user_open
+.advance_user_ws:
+    inc ebx
+    jmp .skip_user_ws
+.user_open:
+    cmp byte [r12 + rbx], '<'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '@'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '!'
+    jne .user_digits_start
+    inc ebx
+.user_digits_start:
+    xor r14d, r14d
+.user_digits:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, '>'
+    je .user_done
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp r14d, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov [role_target + r14], al
+    inc r14d
+    inc ebx
+    jmp .user_digits
+.user_done:
+    test r14d, r14d
+    jz .bad
+    mov [role_target_len], r14d
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .skip_role_ws
+    cmp al, 9
+    je .skip_role_ws
+    cmp al, 10
+    je .skip_role_ws
+    cmp al, 13
+    jne .bad
+.skip_role_ws:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .advance_role_ws
+    cmp al, 9
+    je .advance_role_ws
+    cmp al, 10
+    je .advance_role_ws
+    cmp al, 13
+    je .advance_role_ws
+    jmp .role_open
+.advance_role_ws:
+    inc ebx
+    jmp .skip_role_ws
+.role_open:
+    cmp byte [r12 + rbx], '<'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '@'
+    jne .bad
+    inc ebx
+    cmp ebx, r13d
+    jae .bad
+    cmp byte [r12 + rbx], '&'
+    jne .bad
+    inc ebx
+    xor r14d, r14d
+.role_digits:
+    cmp ebx, r13d
+    jae .bad
+    mov al, [r12 + rbx]
+    cmp al, '>'
+    je .role_done
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    cmp r14d, AUTHOR_ID_CAP - 1
+    jae .bad
+    mov [role_requested + r14], al
+    inc r14d
+    inc ebx
+    jmp .role_digits
+.role_done:
+    test r14d, r14d
+    jz .bad
+    mov [role_requested_len], r14d
+    inc ebx
+.trailing_ws:
+    cmp ebx, r13d
+    jae .ok
+    mov al, [r12 + rbx]
+    cmp al, ' '
+    je .advance_trailing_ws
+    cmp al, 9
+    je .advance_trailing_ws
+    cmp al, 10
+    je .advance_trailing_ws
+    cmp al, 13
+    jne .bad
+.advance_trailing_ws:
+    inc ebx
+    jmp .trailing_ws
+.ok:
+    mov eax, [role_action]
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 ; RDI=tail bytes, ESI=len, DL='#' for <#id> or '&' for <@&id>.
 ; EAX=extracted decimal ID len, or -1. The ID is copied into config_value.
 dispatch_extract_mention_id:
@@ -2679,6 +2970,12 @@ ban_usage_response: db 'Usage: ban <@user>'
 ban_usage_response_len equ $ - ban_usage_response
 ban_success_response: db 'User banned.'
 ban_success_response_len equ $ - ban_success_response
+role_command_usage_response: db 'Usage: role add|remove <@user> <@&role>'
+role_command_usage_response_len equ $ - role_command_usage_response
+role_add_success_response: db 'Role added.'
+role_add_success_response_len equ $ - role_add_success_response
+role_remove_success_response: db 'Role removed.'
+role_remove_success_response_len equ $ - role_remove_success_response
 unban_usage_response: db 'Usage: unban <user-id>'
 unban_usage_response_len equ $ - unban_usage_response
 unban_success_response: db 'User unbanned.'
@@ -2755,6 +3052,12 @@ config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
 warning_target_len: resd 1
 moderation_target_len: resd 1
+role_target_len: resd 1
+role_requested_len: resd 1
+role_action: resd 1
+role_requested_position: resd 1
+role_target: resb AUTHOR_ID_CAP
+role_requested: resb AUTHOR_ID_CAP
 report_target_len: resd 1
 report_log_len: resd 1
 report_log_channel: resb CHANNEL_ID_CAP
