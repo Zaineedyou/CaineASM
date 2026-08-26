@@ -5,6 +5,7 @@ extern discord_send_text
 extern discord_delete_message
 extern discord_get_json
 extern discord_unban_member
+extern discord_kick_member
 extern discord_add_member_role
 extern json_escape_append
 
@@ -141,6 +142,24 @@ _start:
     cmp qword [delete_calls], 2
     jne .fail
 
+    mov dword [failure_stage], 755
+    mov qword [delete_status], 204
+    lea rax, [expected_kick_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_kick_url_len
+    lea rdi, [guild_id]
+    mov esi, guild_id_len
+    lea rdx, [user_id]
+    mov ecx, user_id_len
+    call discord_kick_member
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 3
+    jne .fail
+    lea rax, [expected_unban_url]
+    mov [expected_delete_ptr], rax
+    mov dword [expected_delete_len], expected_unban_url_len
+
     mov dword [failure_stage], 76
     mov qword [delete_status], 403
     lea rdi, [guild_id]
@@ -150,7 +169,7 @@ _start:
     call discord_unban_member
     cmp eax, -1
     jne .fail
-    cmp qword [delete_calls], 3
+    cmp qword [delete_calls], 4
     jne .fail
     mov qword [delete_status], 204
     lea rax, [expected_delete_url]
@@ -469,6 +488,8 @@ user_id: db '987654321098765432'
 user_id_len equ $ - user_id
 expected_unban_url: db 'https://discord.com/api/v10/guilds/123456789012345678/bans/987654321098765432'
 expected_unban_url_len equ $ - expected_unban_url
+expected_kick_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
+expected_kick_url_len equ $ - expected_kick_url
 expected_get_url: db 'https://discord.com/api/v10/guilds/123456789012345678/members/987654321098765432'
 expected_get_url_len equ $ - expected_get_url
 bad_get_url: db 'https://example.invalid/api/v10/guilds/1'

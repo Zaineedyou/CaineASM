@@ -34,6 +34,7 @@ extern channel_auth_resolve
 extern guild_auth_get_bot_roles
 extern guild_auth_bot_above_roles
 extern discord_unban_member
+extern discord_kick_member
 extern guild_word_add
 extern guild_word_remove
 extern guild_word_matches
@@ -83,6 +84,7 @@ extern discord_get_json
 %define CMD_STATUS 7
 %define CMD_SUMMARIZE 8
 %define CMD_WARN 9
+%define CMD_KICK 10
 %define CMD_ADDWORD 17
 %define CMD_REMOVEWORD 18
 %define CMD_WORDS 19
@@ -373,6 +375,8 @@ dispatch_message_create:
     je .summarize
     cmp eax, CMD_WARN
     je .warn
+    cmp eax, CMD_KICK
+    je .kick
     cmp eax, CMD_WARNINGS
     je .warnings
     cmp eax, CMD_CLEARWARN
@@ -1108,6 +1112,45 @@ dispatch_message_create:
     add esi, warning_reply_prefix_len + warning_reply_suffix_len
     lea rdi, [warning_reply]
     jmp .reply
+.kick:
+    mov r8, PERMISSION_KICK_MEMBERS
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_KICK_MEMBERS
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .kick_usage
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    mov dl, '@'
+    call dispatch_extract_mention_id
+    test eax, eax
+    jle .kick_usage
+    mov [moderation_target_len], eax
+    lea rdi, [config_value]
+    mov esi, eax
+    call dispatch_bot_above_target
+    test al, al
+    jz .hierarchy_denied
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [config_value]
+    mov ecx, [moderation_target_len]
+    call discord_kick_member
+    test eax, eax
+    jnz .moderation_error
+    lea rdi, [kick_success_response]
+    mov esi, kick_success_response_len
+    jmp .reply
+.kick_usage:
+    lea rdi, [kick_usage_response]
+    mov esi, kick_usage_response_len
+    jmp .reply
+
 .unban:
     mov r8, PERMISSION_BAN_MEMBERS
     call dispatch_has_permission
@@ -2440,6 +2483,10 @@ ai_error_response: db 'AI request failed. Please try again shortly.'
 ai_error_response_len equ $ - ai_error_response
 ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
 ai_rate_limited_response_len equ $ - ai_rate_limited_response
+kick_usage_response: db 'Usage: kick <@user>'
+kick_usage_response_len equ $ - kick_usage_response
+kick_success_response: db 'User kicked.'
+kick_success_response_len equ $ - kick_success_response
 unban_usage_response: db 'Usage: unban <user-id>'
 unban_usage_response_len equ $ - unban_usage_response
 unban_success_response: db 'User unbanned.'
@@ -2515,6 +2562,7 @@ config_value_len: resd 1
 config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
 warning_target_len: resd 1
+moderation_target_len: resd 1
 report_target_len: resd 1
 report_log_len: resd 1
 report_log_channel: resb CHANNEL_ID_CAP

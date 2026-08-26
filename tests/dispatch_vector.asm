@@ -29,6 +29,7 @@ global channel_auth_resolve
 global guild_auth_get_bot_roles
 global guild_auth_bot_above_roles
 global discord_unban_member
+global discord_kick_member
 global guild_word_add
 global guild_word_remove
 global guild_word_matches
@@ -687,12 +688,13 @@ _start:
     cmp qword [send_calls], 32
     jne .fail
 
-    ; A recognized future moderation command remains explicitly inactive.
+    ; Kick is now gated by effective bot permission; with no cached bot
+    ; permission it must fail closed without calling destructive REST.
     mov dword [failure_stage], 34
     mov dword [vision_mode], VISION_NONE
-    lea rax, [registered_notice]
+    lea rax, [admin_denied_response]
     mov [expected_text_ptr], rax
-    mov dword [expected_text_len], registered_notice_len
+    mov dword [expected_text_len], admin_denied_response_len
     lea rdi, [unknown_event]
     mov esi, unknown_event_len
     call dispatch_message_create
@@ -1036,6 +1038,11 @@ guild_auth_get_bot_roles:
 
 discord_unban_member:
     inc qword [unban_calls]
+    xor eax, eax
+    ret
+
+discord_kick_member:
+    inc qword [kick_calls]
     xor eax, eax
     ret
 
@@ -1480,6 +1487,8 @@ leaderboard_response: db 'XP leaderboard:', 10, '1. user-2 - 3 XP', 10
 leaderboard_response_len equ $ - leaderboard_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
+admin_denied_response: db 'Admin verification unavailable or denied.'
+admin_denied_response_len equ $ - admin_denied_response
 bot_denied_response: db 'Bot lacks the required effective channel permission.'
 bot_denied_response_len equ $ - bot_denied_response
 unban_success_response: db 'User unbanned.'
@@ -1598,6 +1607,7 @@ expected_vision_len: dd 0
 reply_mode: dd REPLY_NONE
 reply_get_calls: dq 0
 unban_calls: dq 0
+kick_calls: dq 0
 bot_permission_enabled: db 0
 bot_roles: db '["2002"]'
 bot_roles_len equ $ - bot_roles
