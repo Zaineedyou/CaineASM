@@ -46,6 +46,7 @@ extern bot_prefix_ptr
 extern bot_prefix_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
+extern discord_get_json
 
 %define MESSAGE_CONTENT_CAP 2048
 %define CHANNEL_ID_CAP 64
@@ -60,6 +61,9 @@ extern gateway_bot_user_id_len
 %define ATTACHMENT_MIME_CAP 64
 %define VISION_IMAGE_CAP 11250
 %define VISION_B64_CAP 15000
+%define REPLY_REFERENCE_ID_CAP 64
+%define REPLY_REFERENCE_URL_CAP 512
+%define REPLY_REFERENCE_RESPONSE_CAP 4096
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 
@@ -216,7 +220,7 @@ dispatch_message_create:
     mov ecx, MESSAGE_CONTENT_CAP - 1
     call json_read_string
     test eax, eax
-    jle .handled
+    js .handled
     mov r15d, eax
 
     ; Source-equivalent automod runs before XP/AFK routing and before disabled
@@ -276,7 +280,13 @@ dispatch_message_create:
     mov esi, r15d
     call dispatch_offset_after_bot_mention
     test eax, eax
-    js .handled
+    jns .trigger_ready
+    mov rdi, r12
+    mov rsi, r13
+    call dispatch_is_reply_to_bot
+    test al, al
+    jz .handled
+    xor eax, eax
 .trigger_ready:
     mov ebx, eax                     ; offset after prefix or mention
     cmp ebx, r15d
@@ -1255,6 +1265,180 @@ dispatch_message_create:
     pop rbx
     ret
 
+; RDI=full MESSAGE_CREATE JSON, RSI=len. AL=1 only when a bounded
+; message_reference points to a message authored by the READY-cached bot ID.
+; Exactly one authenticated Discord GET is issued per valid reference candidate;
+; malformed IDs, transport/API failures, and non-bot authors all fail closed.
+dispatch_is_reply_to_bot:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    mov r15d, r14d                  ; caller's validated channel ID length
+    cmp dword [gateway_bot_user_id_len], 0
+    jle .no
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_message_reference]
+    mov ecx, key_message_reference_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    cmp byte [rax], '{'
+    jne .no
+    mov r14, rax
+    mov rdi, r14
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .no
+    mov rbx, rax
+    mov rdi, r14
+    mov rsi, rbx
+    sub rsi, r14
+    lea rdx, [key_message_id]
+    mov ecx, key_message_id_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    mov rdi, rax
+    mov rsi, rbx
+    lea rdx, [reply_reference_id]
+    mov ecx, REPLY_REFERENCE_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .no
+    mov [reply_reference_id_len], eax
+    mov byte [reply_reference_id + rax], 0
+    lea rdi, [channel_id]
+    mov esi, r15d
+    call dispatch_is_decimal_identifier
+    test al, al
+    jz .no
+    lea rdi, [reply_reference_id]
+    mov esi, [reply_reference_id_len]
+    call dispatch_is_decimal_identifier
+    test al, al
+    jz .no
+    mov eax, reply_reference_url_prefix_len + reply_reference_url_middle_len
+    add eax, r15d
+    add eax, [reply_reference_id_len]
+    cmp eax, REPLY_REFERENCE_URL_CAP - 1
+    ja .no
+    mov [reply_reference_url_len], eax
+    lea rdi, [reply_reference_url]
+    lea rsi, [reply_reference_url_prefix]
+    mov edx, reply_reference_url_prefix_len
+    call copy_bytes
+    lea rdi, [reply_reference_url + reply_reference_url_prefix_len]
+    lea rsi, [channel_id]
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [reply_reference_url + reply_reference_url_prefix_len]
+    add rdi, r15
+    lea rsi, [reply_reference_url_middle]
+    mov edx, reply_reference_url_middle_len
+    call copy_bytes
+    lea rdi, [reply_reference_url + reply_reference_url_prefix_len]
+    add rdi, r15
+    add rdi, reply_reference_url_middle_len
+    lea rsi, [reply_reference_id]
+    mov edx, [reply_reference_id_len]
+    call copy_bytes
+    mov eax, [reply_reference_url_len]
+    mov byte [reply_reference_url + rax], 0
+    lea rdi, [reply_reference_url]
+    mov esi, [reply_reference_url_len]
+    lea rdx, [reply_reference_response]
+    mov ecx, REPLY_REFERENCE_RESPONSE_CAP
+    call discord_get_json
+    test rax, rax
+    jle .no
+    mov [reply_reference_response_len], eax
+    lea rdi, [reply_reference_response]
+    mov esi, eax
+    lea rdx, [key_author]
+    mov ecx, key_author_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    cmp byte [rax], '{'
+    jne .no
+    mov r14, rax
+    mov rdi, r14
+    lea rsi, [reply_reference_response]
+    add rsi, [reply_reference_response_len]
+    call json_object_end
+    test rax, rax
+    jz .no
+    mov rbx, rax
+    mov rdi, r14
+    mov rsi, rbx
+    sub rsi, r14
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_find_key
+    test rax, rax
+    jz .no
+    mov rdi, rax
+    mov rsi, rbx
+    lea rdx, [reply_reference_author_id]
+    mov ecx, AUTHOR_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .no
+    cmp eax, [gateway_bot_user_id_len]
+    jne .no
+    xor ecx, ecx
+.compare_author:
+    cmp ecx, eax
+    jae .yes
+    mov dl, [reply_reference_author_id + rcx]
+    cmp dl, [gateway_bot_user_id + rcx]
+    jne .no
+    inc ecx
+    jmp .compare_author
+.yes:
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=identifier bytes, ESI=len. AL=1 only for nonempty ASCII decimal IDs.
+dispatch_is_decimal_identifier:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, AUTHOR_ID_CAP - 1
+    ja .no
+    xor edx, edx
+.loop:
+    cmp edx, esi
+    jae .yes
+    mov al, [rdi + rdx]
+    sub al, '0'
+    cmp al, 9
+    ja .no
+    inc edx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 ; EAX=0 on stored config; -1 on invalid or persistence failure.
 ; RDI=setting, ESI=setting len, RDX=value, ECX=value len.
 dispatch_store_config:
@@ -2032,6 +2216,14 @@ ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending 
 ai_rate_limited_response_len equ $ - ai_rate_limited_response
 chat_default_prompt: db 'Someone called you. Reply with a concise friendly greeting.'
 chat_default_prompt_len equ $ - chat_default_prompt
+key_message_reference: db 'message_reference'
+key_message_reference_len equ $ - key_message_reference
+key_message_id: db 'message_id'
+key_message_id_len equ $ - key_message_id
+reply_reference_url_prefix: db 'https://discord.com/api/v10/channels/'
+reply_reference_url_prefix_len equ $ - reply_reference_url_prefix
+reply_reference_url_middle: db '/messages/'
+reply_reference_url_middle_len equ $ - reply_reference_url_middle
 history_server_prefix: db 'server-'
 history_server_prefix_len equ $ - history_server_prefix
 history_dm_prefix: db 'dm-'
@@ -2096,3 +2288,10 @@ state_view_reply: resb STATE_VIEW_REPLY_CAP
 history_key_len: resd 1
 command_start: resd 1
 history_key: resb HISTORY_KEY_CAP
+reply_reference_id: resb REPLY_REFERENCE_ID_CAP
+reply_reference_id_len: resd 1
+reply_reference_url: resb REPLY_REFERENCE_URL_CAP
+reply_reference_url_len: resd 1
+reply_reference_response: resb REPLY_REFERENCE_RESPONSE_CAP
+reply_reference_response_len: resd 1
+reply_reference_author_id: resb AUTHOR_ID_CAP

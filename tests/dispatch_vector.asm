@@ -41,11 +41,16 @@ global bot_prefix_ptr
 global bot_prefix_len
 global gateway_bot_user_id
 global gateway_bot_user_id_len
+global discord_get_json
 
 %define SYS_EXIT 60
 %define VISION_NONE 0
 %define VISION_OK 1
 %define VISION_FETCH_FAIL 2
+%define REPLY_NONE 0
+%define REPLY_BOT 1
+%define REPLY_OTHER 2
+%define REPLY_ERROR 3
 
 section .text
 _start:
@@ -55,6 +60,7 @@ _start:
     mov dword [vision_mode], VISION_NONE
     mov dword [vision_sequence], 0
     mov byte [rate_allowed], 1
+    mov dword [reply_mode], REPLY_NONE
     lea rax, [groq_prompt]
     mov [expected_groq_ptr], rax
     mov dword [expected_groq_len], groq_prompt_len
@@ -559,6 +565,61 @@ _start:
     cmp qword [send_calls], 29
     jne .fail
 
+    ; Reply-to-bot makes exactly one bounded GET, verifies the fetched author
+    ; against READY identity, then enters the ordinary text AI route.
+    mov dword [failure_stage], 301
+    mov dword [reply_mode], REPLY_BOT
+    lea rax, [reply_prompt]
+    mov [expected_groq_ptr], rax
+    mov dword [expected_groq_len], reply_prompt_len
+    lea rax, [ai_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_response_len
+    lea rdi, [reply_to_bot_event]
+    mov esi, reply_to_bot_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [reply_get_calls], 1
+    jne .fail
+    cmp qword [groq_calls], 3
+    jne .fail
+    cmp qword [send_calls], 30
+    jne .fail
+
+    ; A reference to another author is ignored after its single GET; it cannot
+    ; invoke AI or send a response.
+    mov dword [failure_stage], 302
+    mov dword [reply_mode], REPLY_OTHER
+    lea rdi, [reply_to_bot_event]
+    mov esi, reply_to_bot_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [reply_get_calls], 2
+    jne .fail
+    cmp qword [groq_calls], 3
+    jne .fail
+    cmp qword [send_calls], 30
+    jne .fail
+
+    ; Transport/API failure on the one permitted reference GET also fails
+    ; closed: no Groq call and no reply are emitted.
+    mov dword [failure_stage], 303
+    mov dword [reply_mode], REPLY_ERROR
+    lea rdi, [reply_to_bot_event]
+    mov esi, reply_to_bot_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [reply_get_calls], 3
+    jne .fail
+    cmp qword [groq_calls], 3
+    jne .fail
+    cmp qword [send_calls], 30
+    jne .fail
+    mov dword [reply_mode], REPLY_NONE
+
     ; After an image is selected, fetch failure must report AI failure and
     ; never silently fall back to a text completion or a vision call.
     mov dword [failure_stage], 31
@@ -579,10 +640,10 @@ _start:
     cmp qword [vision_calls], 3
     jne .fail
     mov dword [failure_stage], 314
-    cmp qword [groq_calls], 2
+    cmp qword [groq_calls], 3
     jne .fail
     mov dword [failure_stage], 315
-    cmp qword [send_calls], 30
+    cmp qword [send_calls], 31
     jne .fail
 
     ; The limiter runs before attachment handling, so a denied request has no
@@ -603,7 +664,7 @@ _start:
     jne .fail
     cmp qword [vision_calls], 3
     jne .fail
-    cmp qword [send_calls], 31
+    cmp qword [send_calls], 32
     jne .fail
     mov byte [rate_allowed], 1
 
@@ -619,7 +680,7 @@ _start:
     jne .fail
     cmp qword [vision_calls], 3
     jne .fail
-    cmp qword [send_calls], 31
+    cmp qword [send_calls], 32
     jne .fail
 
     ; A recognized future moderation command remains explicitly inactive.
@@ -633,7 +694,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [send_calls], 32
+    cmp qword [send_calls], 33
     jne .fail
 
     mov eax, SYS_EXIT
@@ -810,6 +871,51 @@ groq_vision_once:
 .out:
     pop r15
     pop r14
+    pop r13
+    pop r12
+    ret
+
+; RDI=fully constructed Discord URL, ESI=len, RDX=response, ECX=capacity.
+; Reply fixture accepts exactly one channel/message route and supplies either
+; the cached bot author, another author, or a bounded transport-style failure.
+discord_get_json:
+    push r12
+    push r13
+    mov r12, rdx
+    mov r13d, ecx
+    cmp dword [reply_mode], REPLY_NONE
+    je .bad
+    lea r8, [reply_expected_url]
+    mov r9d, reply_expected_url_len
+    cmp esi, r9d
+    jne .bad
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [reply_get_calls]
+    cmp dword [reply_mode], REPLY_ERROR
+    je .bad
+    cmp r13d, reply_bot_response_len + 1
+    jb .bad
+    cmp dword [reply_mode], REPLY_OTHER
+    je .other
+    lea rsi, [reply_bot_response]
+    mov edx, reply_bot_response_len
+    jmp .copy
+.other:
+    lea rsi, [reply_other_response]
+    mov edx, reply_other_response_len
+.copy:
+    mov rdi, r12
+    call copy_bytes
+    mov byte [r12 + rdx], 0
+    mov eax, edx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
     pop r13
     pop r12
     ret
@@ -1258,6 +1364,16 @@ report_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channe
 report_event_len equ $ - report_event
 chat_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^how are you","author":{"id":"112233445566778899","bot":false}}}'
 chat_event_len equ $ - chat_event
+reply_to_bot_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"reply question","message_reference":{"message_id":"998877665544332211"},"author":{"id":"112233445566778899","bot":false}}}'
+reply_to_bot_event_len equ $ - reply_to_bot_event
+reply_prompt: db 'reply question'
+reply_prompt_len equ $ - reply_prompt
+reply_expected_url: db 'https://discord.com/api/v10/channels/123456789012345678/messages/998877665544332211'
+reply_expected_url_len equ $ - reply_expected_url
+reply_bot_response: db '{"author":{"id":"9001"}}'
+reply_bot_response_len equ $ - reply_bot_response
+reply_other_response: db '{"author":{"id":"9002"}}'
+reply_other_response_len equ $ - reply_other_response
 vision_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^describe this","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
 vision_event_len equ $ - vision_event
 vision_empty_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^","attachments":[{"content_type":"image/png","url":"https://cdn.discordapp.com/a.png"}],"author":{"id":"112233445566778899","bot":false}}}'
@@ -1405,3 +1521,5 @@ rate_allow_calls: dq 0
 vision_calls: dq 0
 expected_vision_ptr: dq 0
 expected_vision_len: dd 0
+reply_mode: dd REPLY_NONE
+reply_get_calls: dq 0
