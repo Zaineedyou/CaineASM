@@ -1590,6 +1590,22 @@ _start:
     cmp qword [send_calls], 80
     jne .fail
 
+    mov dword [failure_stage], 78
+    mov qword [expected_channel_ptr], 0
+    mov dword [expected_channel_len], 0
+    lea rax, [reset_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], reset_response_len
+    lea rdi, [reset_event]
+    mov esi, reset_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [history_clear_calls], 2
+    jne .fail
+    cmp qword [send_calls], 81
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -2786,6 +2802,8 @@ unprefixed_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"1234567890
 unprefixed_event_len equ $ - unprefixed_event
 status_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^status","author":{"bot":false}}}'
 status_event_len equ $ - status_event
+reset_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^reset","author":{"id":"user-2","bot":false}}}'
+reset_event_len equ $ - reset_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^rank","author":{"id":"user-2","bot":false}}}'
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
@@ -2976,6 +2994,8 @@ status_uptime_value: db '2d 3h 4m 5s'
 status_uptime_value_len equ $ - status_uptime_value
 status_response: db 0xf0, 0x9f, 0x93, 0x8a, ' **Status Bot**', 10, 0xe2, 0x8f, 0xb1, ' Uptime: 2d 3h 4m 5s', 10, 0xf0, 0x9f, 0x8c, 0x90, ' Servers: 7'
 status_response_len equ $ - status_response
+reset_response: db 0xf0, 0x9f, 0xa7, 0xb9, ' Memory kita udah di-reset sayang!'
+reset_response_len equ $ - reset_response
 rank_response: db 'Your XP: 42'
 rank_response_len equ $ - rank_response
 afklist_response: db 'AFK members:', 10, '- user-2: dinner', 10

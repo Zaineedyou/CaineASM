@@ -1881,6 +1881,10 @@ dispatch_message_create:
     mov esi, ebx
     jmp .reply
 .reset:
+    call dispatch_select_history_key
+    lea rdi, [history_key]
+    mov esi, [history_key_len]
+    call history_clear
     lea rdi, [reset_response]
     mov esi, reset_response_len
     jmp .reply
@@ -4837,7 +4841,7 @@ status_servers_label: db 10, 0xf0, 0x9f, 0x8c, 0x90, ' Servers: '
 status_servers_label_len equ $ - status_servers_label
 status_uptime_fallback: db '0d 0h 0m 0s'
 status_uptime_fallback_len equ $ - status_uptime_fallback
-reset_response: db 'Reset is reserved for the persistence module; current state is volatile.'
+reset_response: db 0xf0, 0x9f, 0xa7, 0xb9, ' Memory kita udah di-reset sayang!'
 reset_response_len equ $ - reset_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
 registered_notice_len equ $ - registered_notice
