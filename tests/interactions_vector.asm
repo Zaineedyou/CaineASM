@@ -15,6 +15,7 @@ global guild_auth_bot_above_role
 global guild_auth_get_bot_roles
 global guild_auth_roles_have
 global guild_config_get
+global state_format_banned_words
 global groq_select_guild
 global groq_select_history
 global groq_chat_once
@@ -251,6 +252,33 @@ _start:
     mov byte [persona_dashboard_mode], 0
 
     mov dword [failure_stage], 18
+    mov byte [moderation_dashboard_mode], 1
+    lea rax, [dashboard_moderation_words_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_moderation_words_response_len
+    lea rdi, [dashboard_moderation_frame]
+    mov esi, dashboard_moderation_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 16
+    jne .fail
+
+    mov dword [failure_stage], 19
+    mov byte [moderation_dashboard_mode], 2
+    lea rax, [dashboard_moderation_empty_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_moderation_empty_response_len
+    lea rdi, [dashboard_moderation_frame]
+    mov esi, dashboard_moderation_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 17
+    jne .fail
+    mov byte [moderation_dashboard_mode], 0
+
+    mov dword [failure_stage], 20
     lea rax, [model_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], model_guild_id_len
@@ -333,10 +361,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 16
+    cmp qword [json_callback_calls], 18
     jne .fail
 
-    mov dword [failure_stage], 18
+    mov dword [failure_stage], 20
     lea rax, [modal_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], modal_guild_id_len
@@ -610,7 +638,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 17
+    cmp qword [json_callback_calls], 19
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -640,7 +668,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 18
+    cmp qword [json_callback_calls], 20
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -656,7 +684,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 19
+    cmp qword [json_callback_calls], 21
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -689,7 +717,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 19
+    cmp qword [json_callback_calls], 21
     jne .fail
 
     mov dword [failure_stage], 31
@@ -917,6 +945,47 @@ guild_config_get:
     xor eax, eax
     xor edx, edx
 .out:
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild, ESI=guild len, RDX=out, ECX=capacity. This seam returns only
+; formatter-shaped bounded rows so the interaction renderer verifies its header
+; and row transformation path without accessing the real state store.
+state_format_banned_words:
+    push rbx
+    push r12
+    mov rbx, rdx
+    cmp byte [moderation_dashboard_mode], 1
+    je .words
+    cmp byte [moderation_dashboard_mode], 2
+    je .empty
+    jmp .bad
+.words:
+    lea r12, [moderation_words_raw]
+    mov edx, moderation_words_raw_len
+    jmp .copy
+.empty:
+    lea r12, [moderation_empty_raw]
+    mov edx, moderation_empty_raw_len
+.copy:
+    cmp ecx, edx
+    jb .bad
+    xor eax, eax
+.copy_loop:
+    cmp eax, edx
+    jae .ok
+    mov cl, [r12 + rax]
+    mov [rbx + rax], cl
+    inc eax
+    jmp .copy_loop
+.ok:
+    mov eax, edx
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
     pop r12
     pop rbx
     ret
@@ -1260,6 +1329,8 @@ dashboard_persona_frame: db '{"op":0,"s":30,"t":"INTERACTION_CREATE","d":{"id":"
 dashboard_persona_frame_len equ $ - dashboard_persona_frame
 dashboard_setpersona_frame: db '{"op":0,"s":31,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_setpersona","component_type":2}}}'
 dashboard_setpersona_frame_len equ $ - dashboard_setpersona_frame
+dashboard_moderation_frame: db '{"op":0,"s":32,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_moderation","component_type":2}}}'
+dashboard_moderation_frame_len equ $ - dashboard_moderation_frame
 dashboard_model_llama_frame: db '{"op":0,"s":9,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_llama70b","component_type":2}}}'
 dashboard_model_llama_frame_len equ $ - dashboard_model_llama_frame
 dashboard_model_gpt120_frame: db '{"op":0,"s":10,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_gpt120b","component_type":2}}}'
@@ -1341,6 +1412,14 @@ dashboard_persona_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[
 dashboard_persona_fallback_response_len equ $ - dashboard_persona_fallback_response
 dashboard_persona_modal_dynamic_response: db '{"type":9,"data":{"custom_id":"modal_setpersona","title":"Edit Persona Bot","components":[{"type":1,"components":[{"type":4,"custom_id":"prompt","label":"System Prompt","style":2,"required":true,"value":"Halo ', 0x5c, '"persona', 0x5c, '"', 0x5c, 0x5c, 0x5c, 'naman"}]}]}}'
 dashboard_persona_modal_dynamic_response_len equ $ - dashboard_persona_modal_dynamic_response
+dashboard_moderation_words_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16711680,"title":"Moderation","fields":[{"name":"Banned Words","value":"spoiler, alpha"}]}],"components":[{"type":1,"components":[{"type":2,"style":4,"label":"Tambah Banned Word","custom_id":"dash_addword"},{"type":2,"style":2,"label":"Hapus Banned Word","custom_id":"dash_removeword"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_moderation_words_response_len equ $ - dashboard_moderation_words_response
+dashboard_moderation_empty_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16711680,"title":"Moderation","fields":[{"name":"Banned Words","value":"Tidak ada"}]}],"components":[{"type":1,"components":[{"type":2,"style":4,"label":"Tambah Banned Word","custom_id":"dash_addword"},{"type":2,"style":2,"label":"Hapus Banned Word","custom_id":"dash_removeword"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_moderation_empty_response_len equ $ - dashboard_moderation_empty_response
+moderation_words_raw: db 'Banned words:', 10, '- spoiler', 10, '- alpha', 10
+moderation_words_raw_len equ $ - moderation_words_raw
+moderation_empty_raw: db 'Banned words:', 10, '(none)', 10
+moderation_empty_raw_len equ $ - moderation_empty_raw
 dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
@@ -1478,6 +1557,7 @@ autorole_dashboard_mode: db 0
 leveling_dashboard_mode: db 0
 model_dashboard_mode: db 0
 persona_dashboard_mode: db 0
+moderation_dashboard_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18

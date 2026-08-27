@@ -20,6 +20,7 @@ extern guild_auth_bot_above_role
 extern guild_auth_get_bot_roles
 extern guild_auth_roles_have
 extern guild_config_get
+extern state_format_banned_words
 extern groq_select_guild
 extern groq_select_history
 extern groq_chat_once
@@ -37,6 +38,8 @@ extern gateway_last_heartbeat_latency_ms
 %define DASHBOARD_DYNAMIC_CAP 1024
 %define DASHBOARD_WELCOME_DYNAMIC_CAP 4096
 %define DASHBOARD_PERSONA_DYNAMIC_CAP 4096
+%define DASHBOARD_MODERATION_DYNAMIC_CAP 4096
+%define DASHBOARD_WORDS_CAP 512
 %define DASHBOARD_TEXT_RENDER_CAP 240
 
 section .text
@@ -498,8 +501,11 @@ interaction_handle_gateway:
     mov r9d, modal_addword_response_len
     jmp .component_respond_json
 .component_moderation:
-    lea r8, [dashboard_moderation_response]
-    mov r9d, dashboard_moderation_response_len
+    call interaction_build_moderation_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_moderation_dynamic]
     jmp .component_respond_json
 .component_resetpersona:
     lea rdi, [interaction_guild_id]
@@ -1083,6 +1089,151 @@ interaction_build_status_response:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; Builds a type-7 Moderation response. The fixed state formatter is used with a
+; 512-byte cap, then its trusted bounded rows are transformed to inline text and
+; JSON-escaped. Formatter/header/row-shape failure returns -1 without sending a
+; partial payload. RAX=response length or -1.
+interaction_build_moderation_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [dashboard_words_raw]
+    mov ecx, DASHBOARD_WORDS_CAP
+    call state_format_banned_words
+    test eax, eax
+    js .bad
+    cmp eax, moderation_words_header_len
+    jb .bad
+    mov r15d, eax
+    lea rdi, [dashboard_words_raw]
+    mov esi, moderation_words_header_len
+    lea rdx, [moderation_words_header]
+    mov ecx, moderation_words_header_len
+    call equal_literal
+    test al, al
+    jz .bad
+    lea r13, [dashboard_words_raw + moderation_words_header_len]
+    mov r14d, r15d
+    sub r14d, moderation_words_header_len
+    lea r12, [moderation_empty]
+    mov r15d, moderation_empty_len
+    cmp r14d, moderation_words_empty_len
+    jne .inline
+    mov rdi, r13
+    mov esi, r14d
+    lea rdx, [moderation_words_empty]
+    mov ecx, moderation_words_empty_len
+    call equal_literal
+    test al, al
+    jnz .build
+.inline:
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_words_to_inline
+    test eax, eax
+    js .bad
+    lea r12, [dashboard_words_inline]
+    mov r15d, eax
+.build:
+    mov eax, dashboard_moderation_prefix_len
+    mov ecx, r15d
+    imul ecx, ecx, 6
+    add eax, ecx
+    add eax, dashboard_moderation_suffix_len
+    cmp eax, DASHBOARD_MODERATION_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, dashboard_moderation_prefix_len
+    lea rdi, [dashboard_moderation_dynamic]
+    lea rsi, [dashboard_moderation_prefix]
+    mov edx, dashboard_moderation_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_moderation_dynamic + dashboard_moderation_prefix_len]
+    mov esi, DASHBOARD_MODERATION_DYNAMIC_CAP - 1 - dashboard_moderation_prefix_len
+    mov rdx, r12
+    mov ecx, r15d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+    lea rdi, [dashboard_moderation_dynamic + rbx]
+    lea rsi, [dashboard_moderation_suffix]
+    mov edx, dashboard_moderation_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_moderation_suffix_len
+    mov byte [dashboard_moderation_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=state formatter rows after its fixed header, ESI=length. Converts rows
+; shaped as '- word<LF>' to 'word, next', retaining a bounded [truncated] row.
+; EAX=inline length or -1 if shape/capacity is invalid. Output is not terminated.
+interaction_words_to_inline:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    lea r8, [rdi + rsi]
+    xor r9d, r9d
+    xor r10d, r10d
+.loop:
+    cmp rdi, r8
+    jae .done
+    mov al, [rdi]
+    cmp al, '-'
+    jne .row
+    lea rax, [rdi + 1]
+    cmp rax, r8
+    jae .bad
+    cmp byte [rax], ' '
+    jne .bad
+    add rdi, 2
+.row:
+    test r10d, r10d
+    jz .copy
+    cmp r9d, DASHBOARD_WORDS_CAP - 2
+    ja .bad
+    mov byte [dashboard_words_inline + r9], ','
+    mov byte [dashboard_words_inline + r9 + 1], ' '
+    add r9d, 2
+.copy:
+    cmp rdi, r8
+    jae .bad
+    mov al, [rdi]
+    inc rdi
+    cmp al, 10
+    je .line_end
+    cmp r9d, DASHBOARD_WORDS_CAP
+    jae .bad
+    mov [dashboard_words_inline + r9], al
+    inc r9d
+    jmp .copy
+.line_end:
+    test r9d, r9d
+    jz .bad
+    mov r10d, 1
+    jmp .loop
+.done:
+    test r10d, r10d
+    jz .bad
+    mov eax, r9d
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; Builds a type-7 Model response. A persisted model is displayed only when it
@@ -2916,6 +3067,16 @@ level_channel_unset: db '(notif di channel chat)'
 level_channel_unset_len equ $ - level_channel_unset
 default_persona_display: db 'You are CaineASM, a concise Discord assistant.'
 default_persona_display_len equ $ - default_persona_display
+moderation_empty: db 'Tidak ada'
+moderation_empty_len equ $ - moderation_empty
+moderation_words_header: db 'Banned words:', 10
+moderation_words_header_len equ $ - moderation_words_header
+moderation_words_empty: db '(none)', 10
+moderation_words_empty_len equ $ - moderation_words_empty
+dashboard_moderation_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16711680,"title":"Moderation","fields":[{"name":"Banned Words","value":"'
+dashboard_moderation_prefix_len equ $ - dashboard_moderation_prefix
+dashboard_moderation_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":4,"label":"Tambah Banned Word","custom_id":"dash_addword"},{"type":2,"style":2,"label":"Hapus Banned Word","custom_id":"dash_removeword"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_moderation_suffix_len equ $ - dashboard_moderation_suffix
 dashboard_model_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","fields":[{"name":"Model Saat Ini","value":"`'
 dashboard_model_prefix_len equ $ - dashboard_model_prefix
 dashboard_model_suffix: db '`"},{"name":"Pilihan Model","value":"`llama70b` ', 0xe2, 0x86, 0x92, ' llama-3.3-70b-versatile\n`gpt120b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-120b\n`gpt20b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-20b\n`qwen32b` ', 0xe2, 0x86, 0x92, ' qwen/qwen3-32b"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -3082,3 +3243,6 @@ dashboard_leveling_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_model_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_persona_dynamic: resb DASHBOARD_PERSONA_DYNAMIC_CAP
 dashboard_persona_modal_dynamic: resb DASHBOARD_PERSONA_DYNAMIC_CAP
+dashboard_moderation_dynamic: resb DASHBOARD_MODERATION_DYNAMIC_CAP
+dashboard_words_raw: resb DASHBOARD_WORDS_CAP
+dashboard_words_inline: resb DASHBOARD_WORDS_CAP
