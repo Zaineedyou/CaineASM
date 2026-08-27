@@ -8,6 +8,8 @@ global gateway_bot_user_id
 global gateway_bot_user_id_len
 global gateway_last_heartbeat_latency_ms
 global gateway_guild_name_get
+global gateway_uptime_format
+global gateway_guild_count
 
 global gateway_send_identify
 global gateway_send_resume
@@ -185,6 +187,13 @@ gateway_process_frame:
     jnz .guild_create
     lea rdi, [event_name]
     mov esi, r14d
+    lea rdx, [event_guild_delete]
+    mov ecx, event_guild_delete_len
+    call literal_equal
+    test al, al
+    jnz .guild_delete
+    lea rdi, [event_name]
+    mov esi, r14d
     lea rdx, [event_member_add]
     mov ecx, event_member_add_len
     call literal_equal
@@ -243,6 +252,12 @@ gateway_process_frame:
     call gateway_cache_guild_name
     ; Authorization and dashboard cache failures never invalidate an otherwise
     ; healthy Gateway session; incomplete cache data displays a safe fallback.
+    jmp .none
+.guild_delete:
+    mov rdi, r12
+    mov rsi, r13
+    call gateway_cache_guild_remove
+    ; Removal is presentation-only and never affects Gateway liveness.
     jmp .none
 .member_add:
     mov rdi, r12
@@ -582,6 +597,103 @@ gateway_cache_guild_name:
     pop rbx
     ret
 
+; RDI=complete GUILD_DELETE dispatch frame, RSI=len. EAX=0 if an exact direct
+; payload ID was parsed and the associated presentation cache entry cleared.
+gateway_cache_guild_remove:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13, rsi
+    test r12, r12
+    jz .bad
+    test r13, r13
+    jle .bad
+    mov rdi, r12
+    lea rsi, [r12 + r13]
+    lea rdx, [key_data]
+    mov ecx, key_data_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r14
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [guild_cache_id_scratch]
+    mov ecx, GUILD_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov [guild_cache_id_scratch_len], eax
+    lea rdi, [guild_cache_id_scratch]
+    mov esi, eax
+    call gateway_decimal_id_valid
+    test al, al
+    jz .bad
+    xor ebx, ebx
+.find:
+    cmp ebx, GUILD_CACHE_SLOTS
+    jae .not_found
+    mov eax, [guild_cache_id_lens + rbx * 4]
+    cmp eax, [guild_cache_id_scratch_len]
+    jne .next
+    mov rax, rbx
+    imul rax, GUILD_ID_CAP
+    lea rdi, [guild_cache_ids + rax]
+    lea rsi, [guild_cache_id_scratch]
+    mov edx, [guild_cache_id_scratch_len]
+    call gateway_equal_bytes
+    test al, al
+    jz .next
+    mov dword [guild_cache_id_lens + rbx * 4], 0
+    mov dword [guild_cache_name_lens + rbx * 4], 0
+    xor eax, eax
+    jmp .out
+.next:
+    inc ebx
+    jmp .find
+.not_found:
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; EAX=number of active guild-name cache entries, bounded by GUILD_CACHE_SLOTS.
+gateway_guild_count:
+    xor ecx, ecx
+    xor eax, eax
+.loop:
+    cmp ecx, GUILD_CACHE_SLOTS
+    jae .done
+    cmp dword [guild_cache_id_lens + rcx * 4], 0
+    je .next
+    inc eax
+.next:
+    inc ecx
+    jmp .loop
+.done:
+    ret
+
 ; RDI=guild decimal ID, ESI=len. RAX=name pointer and EDX=name length only for
 ; an exact cache hit; otherwise both are zero. The returned pointer remains valid
 ; until the single-threaded Gateway processes another GUILD_CREATE cache update.
@@ -624,6 +736,140 @@ gateway_guild_name_get:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=output, ESI=capacity. EAX=written bytes or -1. Formats process uptime
+; from the monotonic baseline as the source contract '%dd %dh %dm %ds'. It is
+; bounded before each decimal append and falls back to zero elapsed time when
+; monotonic time has not been captured.
+gateway_uptime_format:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    mov r12, rdi
+    mov r15d, esi
+    xor r13d, r13d
+    call gateway_now_ms
+    cmp byte [gateway_started_valid], 0
+    je .zero
+    cmp rax, [gateway_started_ms]
+    jb .zero
+    sub rax, [gateway_started_ms]
+    jmp .seconds
+.zero:
+    xor eax, eax
+.seconds:
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    mov rbx, rax
+    xor edx, edx
+    mov ecx, 86400
+    div rcx
+    mov r14, rdx
+    call gateway_uptime_append_uint
+    test eax, eax
+    js .bad
+    call gateway_uptime_append_day_suffix
+    test eax, eax
+    js .bad
+    mov rax, r14
+    xor edx, edx
+    mov ecx, 3600
+    div rcx
+    mov r14, rdx
+    call gateway_uptime_append_uint
+    test eax, eax
+    js .bad
+    call gateway_uptime_append_hour_suffix
+    test eax, eax
+    js .bad
+    mov rax, r14
+    xor edx, edx
+    mov ecx, 60
+    div rcx
+    mov r14, rdx
+    call gateway_uptime_append_uint
+    test eax, eax
+    js .bad
+    call gateway_uptime_append_minute_suffix
+    test eax, eax
+    js .bad
+    mov rax, r14
+    call gateway_uptime_append_uint
+    test eax, eax
+    js .bad
+    call gateway_uptime_append_second_suffix
+    test eax, eax
+    js .bad
+    mov eax, r13d
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RAX=unsigned integer. Appends at most 20 decimal bytes to uptime output.
+gateway_uptime_append_uint:
+    mov ecx, r13d
+    add ecx, 20
+    cmp ecx, r15d
+    ja .bad
+    lea rdi, [r12 + r13]
+    call append_uint
+    test eax, eax
+    js .bad
+    add r13d, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+gateway_uptime_append_day_suffix:
+    mov al, 'd'
+    jmp gateway_uptime_append_suffix
+.gateway_unused:
+    ret
+gateway_uptime_append_hour_suffix:
+    mov al, 'h'
+    jmp gateway_uptime_append_suffix
+gateway_uptime_append_minute_suffix:
+    mov al, 'm'
+    jmp gateway_uptime_append_suffix
+gateway_uptime_append_second_suffix:
+    mov al, 's'
+; AL=suffix letter. Appends '<letter><space>' except the final seconds letter.
+gateway_uptime_append_suffix:
+    mov ecx, r13d
+    inc ecx
+    cmp ecx, r15d
+    ja .bad
+    mov [r12 + r13], al
+    inc r13d
+    cmp al, 's'
+    je .ok
+    mov ecx, r13d
+    inc ecx
+    cmp ecx, r15d
+    ja .bad
+    mov byte [r12 + r13], ' '
+    inc r13d
+.ok:
+    mov eax, r13d
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; RDI=ASCII ID, ESI=len. AL=1 only for nonzero decimal bytes up to capacity.
@@ -1061,6 +1307,16 @@ gateway_reset_state:
     mov dword [resume_url_len], 0
     mov dword [gateway_bot_user_id_len], 0
     mov byte [gateway_bot_user_id], 0
+    call gateway_now_ms
+    test rax, rax
+    jz .no_start_time
+    mov [gateway_started_ms], rax
+    mov byte [gateway_started_valid], 1
+    jmp .start_time_done
+.no_start_time:
+    mov qword [gateway_started_ms], 0
+    mov byte [gateway_started_valid], 0
+.start_time_done:
     mov dword [guild_cache_evict], 0
     xor ecx, ecx
 .clear_guild_cache:
@@ -1114,6 +1370,8 @@ event_resumed: db 'RESUMED'
 event_resumed_len equ $ - event_resumed
 event_guild_create: db 'GUILD_CREATE'
 event_guild_create_len equ $ - event_guild_create
+event_guild_delete: db 'GUILD_DELETE'
+event_guild_delete_len equ $ - event_guild_delete
 event_member_add: db 'GUILD_MEMBER_ADD'
 event_member_add_len equ $ - event_member_add
 event_member_remove: db 'GUILD_MEMBER_REMOVE'
@@ -1163,6 +1421,8 @@ gateway_bot_user_id_len: dd 0
 clock_spec: dq 0, 0
 jitter_seed: dq 0
 guild_cache_evict: dd 0
+gateway_started_ms: dq 0
+gateway_started_valid: db 0
 
 section .bss
 gateway_buffer: resb GATEWAY_BUFFER_CAP

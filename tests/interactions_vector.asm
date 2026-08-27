@@ -18,6 +18,8 @@ global guild_config_get
 global state_format_banned_words
 global guild_channel_list
 global gateway_guild_name_get
+global gateway_uptime_format
+global gateway_guild_count
 global groq_select_guild
 global groq_select_history
 global groq_chat_once
@@ -1000,6 +1002,29 @@ guild_config_get:
     pop rbx
     ret
 
+; RDI=out, ESI=capacity. Fixed uptime seam for Status Bot renderer.
+gateway_uptime_format:
+    cmp esi, status_uptime_len
+    jb .bad
+    xor eax, eax
+.copy:
+    cmp eax, status_uptime_len
+    jae .done
+    mov cl, [status_uptime + rax]
+    mov [rdi + rax], cl
+    inc eax
+    jmp .copy
+.done:
+    mov eax, status_uptime_len
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+gateway_guild_count:
+    mov eax, 7
+    ret
+
 ; RDI=guild, ESI=guild len. Returns a cache-name seam for dashboard main/back.
 gateway_guild_name_get:
     cmp byte [dashboard_guild_mode], 1
@@ -1626,10 +1651,12 @@ healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal"
 healthcheck_ok_edit_len equ $ - healthcheck_ok_edit
 healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada komponen bermasalah","description":"Satu atau lebih probe bounded gagal atau cache belum lengkap. Periksa konfigurasi dan coba lagi."}]}'
 healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
-status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"32 messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"Uptime","value":"1d 2h 3m 4s"},{"name":"Servers","value":"7"},{"name":"History Limit","value":"32 messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 status_dynamic_response_len equ $ - status_dynamic_response
 dashboard_guild_name: db 'Caine "Guild', 10, 'Utama'
 dashboard_guild_name_len equ $ - dashboard_guild_name
+status_uptime: db '1d 2h 3m 4s'
+status_uptime_len equ $ - status_uptime
 general_log_channel: db '111111111111111111'
 general_log_channel_len equ $ - general_log_channel
 general_disabled_channels: db '<#333333333333333333>, <#444444444444444444>'

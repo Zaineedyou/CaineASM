@@ -23,6 +23,8 @@ extern guild_config_get
 extern state_format_banned_words
 extern guild_channel_list
 extern gateway_guild_name_get
+extern gateway_uptime_format
+extern gateway_guild_count
 extern groq_select_guild
 extern groq_select_history
 extern groq_chat_once
@@ -44,6 +46,7 @@ extern gateway_last_heartbeat_latency_ms
 %define DASHBOARD_MAIN_DYNAMIC_CAP 4096
 %define DASHBOARD_WORDS_CAP 512
 %define DASHBOARD_TEXT_RENDER_CAP 240
+%define DASHBOARD_UPTIME_CAP 64
 
 section .text
 
@@ -1211,15 +1214,16 @@ interaction_build_general_response:
     pop rbx
     ret
 
-; Builds a type-7 dashboard status response without exposing arbitrary stored
-; data. Only `max_history` accepted by interaction_history_valid is emitted.
-; RAX is the response length, or -1 when the fixed body capacity would overflow.
+; Builds a type-7 Status Bot response from bounded Gateway metrics plus only a
+; `max_history` accepted by interaction_history_valid. Metric cache failures
+; become a generic configuration failure; no partial JSON is exposed.
 interaction_build_status_response:
     push rbx
     push r12
     push r13
     push r14
     push r15
+    sub rsp, 32
     lea r12, [status_default_history]
     mov r15d, status_default_history_len
     lea rdi, [interaction_guild_id]
@@ -1228,20 +1232,47 @@ interaction_build_status_response:
     mov ecx, setting_history_len
     call guild_config_get
     test rax, rax
-    jz .build
+    jz .history_ready
     test edx, edx
-    jle .build
+    jle .history_ready
     mov r13, rax
     mov r14d, edx
     mov rdi, r13
     mov esi, r14d
     call interaction_history_valid
     test al, al
-    jz .build
+    jz .history_ready
     mov r12, r13
     mov r15d, r14d
-.build:
+.history_ready:
+    mov [rsp], r12
+    mov dword [rsp + 8], r15d
+    lea rdi, [dashboard_status_uptime]
+    mov esi, DASHBOARD_UPTIME_CAP
+    call gateway_uptime_format
+    test eax, eax
+    jle .bad
+    mov dword [rsp + 12], eax
+    call gateway_guild_count
+    test eax, eax
+    js .bad
+    mov r14, rax
+    lea rdi, [dashboard_status_server_count]
+    mov esi, 20
+    mov rax, r14
+    call interaction_uint_to_decimal
+    test eax, eax
+    jle .bad
+    mov dword [rsp + 16], eax
+    mov r12, [rsp]
+    mov r15d, [rsp + 8]
+    mov r13d, [rsp + 12]
+    mov r14d, [rsp + 16]
     mov eax, dashboard_status_prefix_len
+    add eax, r13d
+    add eax, dashboard_status_uptime_middle_len
+    add eax, r14d
+    add eax, dashboard_status_count_middle_len
     add eax, r15d
     add eax, dashboard_status_suffix_len
     cmp eax, DASHBOARD_DYNAMIC_CAP - 1
@@ -1251,11 +1282,26 @@ interaction_build_status_response:
     lea rsi, [dashboard_status_prefix]
     mov edx, dashboard_status_prefix_len
     call interaction_copy_bytes
-    lea rdi, [dashboard_status_dynamic + dashboard_status_prefix_len]
+    add rdi, dashboard_status_prefix_len
+    lea rsi, [dashboard_status_uptime]
+    mov edx, r13d
+    call interaction_copy_bytes
+    add rdi, r13
+    lea rsi, [dashboard_status_uptime_middle]
+    mov edx, dashboard_status_uptime_middle_len
+    call interaction_copy_bytes
+    add rdi, dashboard_status_uptime_middle_len
+    lea rsi, [dashboard_status_server_count]
+    mov edx, r14d
+    call interaction_copy_bytes
+    add rdi, r14
+    lea rsi, [dashboard_status_count_middle]
+    mov edx, dashboard_status_count_middle_len
+    call interaction_copy_bytes
+    add rdi, dashboard_status_count_middle_len
     mov rsi, r12
     mov edx, r15d
     call interaction_copy_bytes
-    lea rdi, [dashboard_status_dynamic + dashboard_status_prefix_len]
     add rdi, r15
     lea rsi, [dashboard_status_suffix]
     mov edx, dashboard_status_suffix_len
@@ -1266,11 +1312,55 @@ interaction_build_status_response:
 .bad:
     mov eax, -1
 .out:
+    add rsp, 32
     pop r15
     pop r14
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=destination, ESI=capacity, RAX=value. EAX=decimal byte count or -1.
+interaction_uint_to_decimal:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    lea r8, [interaction_uint_scratch + 20]
+    xor ecx, ecx
+    test rax, rax
+    jnz .digits
+    cmp esi, 1
+    jb .bad
+    mov byte [rdi], '0'
+    mov eax, 1
+    ret
+.digits:
+    mov r9d, 10
+.loop:
+    xor edx, edx
+    div r9
+    add dl, '0'
+    dec r8
+    mov [r8], dl
+    inc ecx
+    test rax, rax
+    jnz .loop
+    cmp ecx, esi
+    ja .bad
+    xor edx, edx
+.copy:
+    cmp edx, ecx
+    jae .done
+    mov al, [r8 + rdx]
+    mov [rdi + rdx], al
+    inc edx
+    jmp .copy
+.done:
+    mov eax, ecx
+    ret
+.bad:
+    mov eax, -1
     ret
 
 ; Builds a type-7 Moderation response. The fixed state formatter is used with a
@@ -3319,8 +3409,12 @@ dashboard_history_modal_prefix: db '{"type":9,"data":{"custom_id":"modal_sethist
 dashboard_history_modal_prefix_len equ $ - dashboard_history_modal_prefix
 dashboard_history_modal_suffix: db '"}]}]}}'
 dashboard_history_modal_suffix_len equ $ - dashboard_history_modal_suffix
-dashboard_status_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"'
+dashboard_status_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"Uptime","value":"'
 dashboard_status_prefix_len equ $ - dashboard_status_prefix
+dashboard_status_uptime_middle: db '"},{"name":"Servers","value":"'
+dashboard_status_uptime_middle_len equ $ - dashboard_status_uptime_middle
+dashboard_status_count_middle: db '"},{"name":"History Limit","value":"'
+dashboard_status_count_middle_len equ $ - dashboard_status_count_middle
 dashboard_status_suffix: db ' messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_status_suffix_len equ $ - dashboard_status_suffix
 health_probe_ping: db 'ping'
@@ -3441,3 +3535,6 @@ dashboard_words_inline: resb DASHBOARD_WORDS_CAP
 dashboard_history_modal_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_general_disabled: resb DASHBOARD_WORDS_CAP
 dashboard_main_dynamic: resb DASHBOARD_MAIN_DYNAMIC_CAP
+dashboard_status_uptime: resb DASHBOARD_UPTIME_CAP
+dashboard_status_server_count: resb 20
+interaction_uint_scratch: resb 21

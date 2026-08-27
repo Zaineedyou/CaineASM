@@ -23,6 +23,8 @@ global discord_token_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
 extern gateway_guild_name_get
+extern gateway_guild_count
+extern gateway_uptime_format
 
 %define SYS_EXIT 60
 %define ACTION_RECONNECT 1
@@ -164,12 +166,42 @@ _start:
     test al, al
     jz .fail
     mov dword [failure_stage], 66
+    call gateway_guild_count
+    cmp eax, 1
+    jne .fail
+    mov dword [failure_stage], 67
+    lea rdi, [uptime_output]
+    mov esi, 64
+    call gateway_uptime_format
+    test eax, eax
+    jle .fail
+    mov esi, eax
+    lea rdi, [uptime_output]
+    call uptime_shape_valid
+    test al, al
+    jz .fail
+    mov dword [failure_stage], 68
     lea rdi, [missing_guild_id]
     mov esi, missing_guild_id_len
     call gateway_guild_name_get
     test rax, rax
     jnz .fail
     test edx, edx
+    jnz .fail
+    ; GUILD_DELETE removes only presentation cache state and never dispatches.
+    mov dword [failure_stage], 69
+    lea rdi, [guild_delete_frame]
+    mov esi, guild_delete_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    call gateway_guild_count
+    test eax, eax
+    jnz .fail
+    lea rdi, [cached_guild_id]
+    mov esi, cached_guild_id_len
+    call gateway_guild_name_get
+    test rax, rax
     jnz .fail
 
     ; MESSAGE_CREATE is dispatched only after its Gateway type is recognized.
@@ -414,6 +446,67 @@ equal_bytes:
     xor eax, eax
     ret
 
+; RDI=uptime ASCII buffer, ESI=len. AL=1 for '<digits>d <digits>h <digits>m <digits>s'.
+uptime_shape_valid:
+    xor ecx, ecx
+    xor edx, edx
+.digits:
+    cmp ecx, esi
+    jae .no
+    mov al, [rdi + rcx]
+    cmp al, '0'
+    jb .suffix
+    cmp al, '9'
+    ja .suffix
+    mov edx, 1
+    inc ecx
+    jmp .digits
+.suffix:
+    test edx, edx
+    jz .no
+    cmp al, 'd'
+    je .day
+    cmp al, 'h'
+    je .hour
+    cmp al, 'm'
+    je .minute
+    cmp al, 's'
+    je .second
+    jmp .no
+.day:
+    cmp ecx, esi
+    jae .no
+    cmp byte [rdi + rcx + 1], ' '
+    jne .no
+    add ecx, 2
+    xor edx, edx
+    jmp .digits
+.hour:
+    cmp ecx, esi
+    jae .no
+    cmp byte [rdi + rcx + 1], ' '
+    jne .no
+    add ecx, 2
+    xor edx, edx
+    jmp .digits
+.minute:
+    cmp ecx, esi
+    jae .no
+    cmp byte [rdi + rcx + 1], ' '
+    jne .no
+    add ecx, 2
+    xor edx, edx
+    jmp .digits
+.second:
+    inc ecx
+    cmp ecx, esi
+    jne .no
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 section .rodata
 token: db 'token-value'
 token_len equ $ - token
@@ -439,6 +532,8 @@ reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
 guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","name":"Guild \"A\"","owner_id":"9001","roles":[]}}'
 guild_create_frame_len equ $ - guild_create_frame
+guild_delete_frame: db '{"op":0,"s":441,"t":"GUILD_DELETE","d":{"id":"1001"}}'
+guild_delete_frame_len equ $ - guild_delete_frame
 cached_guild_id: db '1001'
 cached_guild_id_len equ $ - cached_guild_id
 cached_guild_name: db 'Guild "A"'
@@ -455,6 +550,9 @@ heartbeat_payload: db '{"op":1,"d":42}'
 heartbeat_payload_len equ $ - heartbeat_payload
 resume_payload: db '{"op":6,"d":{"token":"token-value","session_id":"session-1","seq":42}}'
 resume_payload_len equ $ - resume_payload
+
+section .bss
+uptime_output: resb 64
 
 section .data
 discord_token_ptr: dq 0
