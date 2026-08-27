@@ -4217,7 +4217,7 @@ warning_reply_prefix: db 'Warnings: '
 warning_reply_prefix_len equ $ - warning_reply_prefix
 warning_reply_suffix: db '.'
 warning_reply_suffix_len equ $ - warning_reply_suffix
-help_response: db 'CaineASM commands: help, status, reset, afk, afklist, rank, leaderboard, summarize, and moderation/config commands.'
+help_response: db '**Hai sayang! Ini cara pakai aku:**\n`Caine <pertanyaan>` - tanya apapun\n`Caine` + kirim gambar - analisis gambar\n`Caine summarize [jumlah]` - rangkum chat\n`Caine report @user alasan` - laporin user\n`Caine reset` - hapus memory\n`Caine afk [alasan]` - set AFK\n`Caine afklist` - lihat siapa yang AFK\n`Caine rank [@user]` - lihat rank/XP\n`Caine leaderboard` - top 10 XP\n`Caine status` - status bot\n`Caine setmodel <alias>` - ganti model AI\n`Caine sethistory <angka>` - set batas history chat\n`/info` - info bot\n`/dashboard` - buka dashboard (admin)\n\n**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove\n\n**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
 help_response_len equ $ - help_response
 status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
 status_response_len equ $ - status_response
