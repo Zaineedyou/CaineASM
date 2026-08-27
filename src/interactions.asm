@@ -36,6 +36,7 @@ extern gateway_last_heartbeat_latency_ms
 %define PERMISSION_ADMINISTRATOR 0x8
 %define DASHBOARD_DYNAMIC_CAP 1024
 %define DASHBOARD_WELCOME_DYNAMIC_CAP 4096
+%define DASHBOARD_PERSONA_DYNAMIC_CAP 4096
 %define DASHBOARD_TEXT_RENDER_CAP 240
 
 section .text
@@ -523,12 +524,18 @@ interaction_handle_gateway:
     lea r8, [dashboard_status_dynamic]
     jmp .component_respond_json
 .component_setpersona:
-    lea r8, [modal_setpersona_response]
-    mov r9d, modal_setpersona_response_len
+    call interaction_build_persona_modal_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_persona_modal_dynamic]
     jmp .component_respond_json
 .component_persona:
-    lea r8, [dashboard_persona_response]
-    mov r9d, dashboard_persona_response_len
+    call interaction_build_persona_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_persona_dynamic]
     jmp .component_respond_json
 .component_setlevelchannel:
     lea r8, [modal_setlevelchannel_response]
@@ -542,8 +549,11 @@ interaction_handle_gateway:
     lea r8, [dashboard_leveling_dynamic]
     jmp .component_respond_json
 .component_model:
-    lea r8, [dashboard_model_response]
-    mov r9d, dashboard_model_response_len
+    call interaction_build_model_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_model_dynamic]
     jmp .component_respond_json
 .component_setgoodbyemsg:
     lea r8, [modal_setgoodbyemsg_response]
@@ -1063,6 +1073,241 @@ interaction_build_status_response:
     mov edx, dashboard_status_suffix_len
     call interaction_copy_bytes
     mov byte [dashboard_status_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 Model response. A persisted model is displayed only when it
+; exactly matches one canonical allowlisted identifier; unknown data fails closed
+; to the default model. RAX=response length or -1 on bounded output overflow.
+interaction_build_model_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [model_id_llama]
+    mov r15d, model_id_llama_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_model]
+    mov ecx, setting_model_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    lea rdx, [model_id_llama]
+    mov ecx, model_id_llama_len
+    call equal_literal
+    test al, al
+    jz .gpt120
+    lea r12, [model_id_llama]
+    mov r15d, model_id_llama_len
+    jmp .build
+.gpt120:
+    mov rdi, r13
+    mov esi, r14d
+    lea rdx, [model_id_gpt120]
+    mov ecx, model_id_gpt120_len
+    call equal_literal
+    test al, al
+    jz .gpt20
+    lea r12, [model_id_gpt120]
+    mov r15d, model_id_gpt120_len
+    jmp .build
+.gpt20:
+    mov rdi, r13
+    mov esi, r14d
+    lea rdx, [model_id_gpt20]
+    mov ecx, model_id_gpt20_len
+    call equal_literal
+    test al, al
+    jz .qwen
+    lea r12, [model_id_gpt20]
+    mov r15d, model_id_gpt20_len
+    jmp .build
+.qwen:
+    mov rdi, r13
+    mov esi, r14d
+    lea rdx, [model_id_qwen]
+    mov ecx, model_id_qwen_len
+    call equal_literal
+    test al, al
+    jz .build
+    lea r12, [model_id_qwen]
+    mov r15d, model_id_qwen_len
+.build:
+    mov eax, dashboard_model_prefix_len
+    add eax, r15d
+    add eax, dashboard_model_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_model_dynamic]
+    lea rsi, [dashboard_model_prefix]
+    mov edx, dashboard_model_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_model_dynamic + dashboard_model_prefix_len]
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    lea rdi, [dashboard_model_dynamic + dashboard_model_prefix_len]
+    add rdi, r15
+    lea rsi, [dashboard_model_suffix]
+    mov edx, dashboard_model_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_model_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 Persona response. Stored text must pass the normal text policy
+; and a 240-byte display bound; it is JSON-escaped before output. The fallback
+; matches CaineASM's effective Groq persona. RAX=response length or -1 on error.
+interaction_build_persona_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [default_persona_display]
+    mov r15d, default_persona_display_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_persona]
+    mov ecx, setting_persona_len
+    call guild_config_get
+    test rax, rax
+    jz .bound
+    test edx, edx
+    jle .bound
+    cmp edx, DASHBOARD_TEXT_RENDER_CAP
+    ja .bound
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_text_valid
+    test al, al
+    jz .bound
+    mov r12, r13
+    mov r15d, r14d
+.bound:
+    mov eax, dashboard_persona_prefix_len
+    mov ecx, r15d
+    imul ecx, ecx, 6
+    add eax, ecx
+    add eax, dashboard_persona_suffix_len
+    cmp eax, DASHBOARD_PERSONA_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, dashboard_persona_prefix_len
+    lea rdi, [dashboard_persona_dynamic]
+    lea rsi, [dashboard_persona_prefix]
+    mov edx, dashboard_persona_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_persona_dynamic + dashboard_persona_prefix_len]
+    mov esi, DASHBOARD_PERSONA_DYNAMIC_CAP - 1 - dashboard_persona_prefix_len
+    mov rdx, r12
+    mov ecx, r15d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+    lea rdi, [dashboard_persona_dynamic + rbx]
+    lea rsi, [dashboard_persona_suffix]
+    mov edx, dashboard_persona_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_persona_suffix_len
+    mov byte [dashboard_persona_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-9 Edit Persona modal with a bounded escaped initial value. The
+; selected text follows the normal config limit (511 bytes), not the shorter
+; dashboard preview limit. RAX=response length or -1 on bounded overflow.
+interaction_build_persona_modal_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [default_persona_display]
+    mov r15d, default_persona_display_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_persona]
+    mov ecx, setting_persona_len
+    call guild_config_get
+    test rax, rax
+    jz .bound
+    test edx, edx
+    jle .bound
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_text_valid
+    test al, al
+    jz .bound
+    mov r12, r13
+    mov r15d, r14d
+.bound:
+    mov eax, dashboard_persona_modal_prefix_len
+    mov ecx, r15d
+    imul ecx, ecx, 6
+    add eax, ecx
+    add eax, dashboard_persona_modal_suffix_len
+    cmp eax, DASHBOARD_PERSONA_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, dashboard_persona_modal_prefix_len
+    lea rdi, [dashboard_persona_modal_dynamic]
+    lea rsi, [dashboard_persona_modal_prefix]
+    mov edx, dashboard_persona_modal_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_persona_modal_dynamic + dashboard_persona_modal_prefix_len]
+    mov esi, DASHBOARD_PERSONA_DYNAMIC_CAP - 1 - dashboard_persona_modal_prefix_len
+    mov rdx, r12
+    mov ecx, r15d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+    lea rdi, [dashboard_persona_modal_dynamic + rbx]
+    lea rsi, [dashboard_persona_modal_suffix]
+    mov edx, dashboard_persona_modal_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_persona_modal_suffix_len
+    mov byte [dashboard_persona_modal_dynamic + rbx], 0
     mov eax, ebx
     jmp .out
 .bad:
@@ -2669,6 +2914,20 @@ dashboard_unset: db 'Belum diset'
 dashboard_unset_len equ $ - dashboard_unset
 level_channel_unset: db '(notif di channel chat)'
 level_channel_unset_len equ $ - level_channel_unset
+default_persona_display: db 'You are CaineASM, a concise Discord assistant.'
+default_persona_display_len equ $ - default_persona_display
+dashboard_model_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","fields":[{"name":"Model Saat Ini","value":"`'
+dashboard_model_prefix_len equ $ - dashboard_model_prefix
+dashboard_model_suffix: db '`"},{"name":"Pilihan Model","value":"`llama70b` ', 0xe2, 0x86, 0x92, ' llama-3.3-70b-versatile\n`gpt120b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-120b\n`gpt20b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-20b\n`qwen32b` ', 0xe2, 0x86, 0x92, ' qwen/qwen3-32b"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_model_suffix_len equ $ - dashboard_model_suffix
+dashboard_persona_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":14365436,"title":"Persona Bot","fields":[{"name":"System Prompt Sekarang","value":"'
+dashboard_persona_prefix_len equ $ - dashboard_persona_prefix
+dashboard_persona_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Edit Persona","custom_id":"dash_setpersona"},{"type":2,"style":4,"label":"Reset ke Default","custom_id":"dash_resetpersona"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_persona_suffix_len equ $ - dashboard_persona_suffix
+dashboard_persona_modal_prefix: db '{"type":9,"data":{"custom_id":"modal_setpersona","title":"Edit Persona Bot","components":[{"type":1,"components":[{"type":4,"custom_id":"prompt","label":"System Prompt","style":2,"required":true,"value":"'
+dashboard_persona_modal_prefix_len equ $ - dashboard_persona_modal_prefix
+dashboard_persona_modal_suffix: db '"}]}]}}'
+dashboard_persona_modal_suffix_len equ $ - dashboard_persona_modal_suffix
 dashboard_autorole_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16753920,"title":"Auto-role","fields":[{"name":"Role Saat Join","value":"'
 dashboard_autorole_prefix_len equ $ - dashboard_autorole_prefix
 dashboard_autorole_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Auto-role","custom_id":"dash_setautorole"},{"type":2,"style":4,"label":"Hapus Auto-role","custom_id":"dash_removeautorole"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -2820,3 +3079,6 @@ dashboard_general_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_welcome_dynamic: resb DASHBOARD_WELCOME_DYNAMIC_CAP
 dashboard_autorole_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_leveling_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_model_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_persona_dynamic: resb DASHBOARD_PERSONA_DYNAMIC_CAP
+dashboard_persona_modal_dynamic: resb DASHBOARD_PERSONA_DYNAMIC_CAP

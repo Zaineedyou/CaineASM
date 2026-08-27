@@ -172,9 +172,9 @@ _start:
     mov byte [leveling_dashboard_mode], 0
 
     mov dword [failure_stage], 12
-    lea rax, [dashboard_model_response]
+    lea rax, [dashboard_model_default_response]
     mov [expected_json_ptr], rax
-    mov dword [expected_json_len], dashboard_model_response_len
+    mov dword [expected_json_len], dashboard_model_default_response_len
     lea rdi, [dashboard_model_frame]
     mov esi, dashboard_model_frame_len
     call interaction_handle_gateway
@@ -184,6 +184,73 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 13
+    mov byte [model_dashboard_mode], 1
+    lea rax, [dashboard_model_qwen_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_model_qwen_response_len
+    lea rdi, [dashboard_model_frame]
+    mov esi, dashboard_model_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 11
+    jne .fail
+
+    mov dword [failure_stage], 14
+    mov byte [model_dashboard_mode], 2
+    lea rax, [dashboard_model_default_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_model_default_response_len
+    lea rdi, [dashboard_model_frame]
+    mov esi, dashboard_model_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 12
+    jne .fail
+    mov byte [model_dashboard_mode], 0
+
+    mov dword [failure_stage], 15
+    mov byte [persona_dashboard_mode], 1
+    lea rax, [dashboard_persona_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_persona_dynamic_response_len
+    lea rdi, [dashboard_persona_frame]
+    mov esi, dashboard_persona_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 13
+    jne .fail
+
+    mov dword [failure_stage], 16
+    mov byte [persona_dashboard_mode], 2
+    lea rax, [dashboard_persona_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_persona_fallback_response_len
+    lea rdi, [dashboard_persona_frame]
+    mov esi, dashboard_persona_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 14
+    jne .fail
+
+    mov dword [failure_stage], 17
+    mov byte [persona_dashboard_mode], 1
+    lea rax, [dashboard_persona_modal_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_persona_modal_dynamic_response_len
+    lea rdi, [dashboard_setpersona_frame]
+    mov esi, dashboard_setpersona_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 15
+    jne .fail
+    mov byte [persona_dashboard_mode], 0
+
+    mov dword [failure_stage], 18
     lea rax, [model_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], model_guild_id_len
@@ -266,10 +333,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 11
+    cmp qword [json_callback_calls], 16
     jne .fail
 
-    mov dword [failure_stage], 13
+    mov dword [failure_stage], 18
     lea rax, [modal_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], modal_guild_id_len
@@ -543,7 +610,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 12
+    cmp qword [json_callback_calls], 17
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -573,7 +640,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 13
+    cmp qword [json_callback_calls], 18
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -589,7 +656,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 14
+    cmp qword [json_callback_calls], 19
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -622,7 +689,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 14
+    cmp qword [json_callback_calls], 19
     jne .fail
 
     mov dword [failure_stage], 31
@@ -681,6 +748,46 @@ guild_config_get:
     push r12
     mov rbx, rdx
     mov r12d, ecx
+    cmp byte [model_dashboard_mode], 0
+    je .check_persona
+    cmp r12d, setting_model_len
+    jne .none
+    mov rdi, rbx
+    lea rsi, [setting_model]
+    mov edx, setting_model_len
+    call equal_bytes
+    test al, al
+    jz .none
+    cmp byte [model_dashboard_mode], 1
+    jne .model_invalid
+    lea rax, [model_id_qwen]
+    mov edx, model_id_qwen_len
+    jmp .out
+.model_invalid:
+    lea rax, [invalid_model_id]
+    mov edx, invalid_model_id_len
+    jmp .out
+.check_persona:
+    cmp byte [persona_dashboard_mode], 0
+    je .check_autorole
+    cmp r12d, setting_persona_len
+    jne .none
+    mov rdi, rbx
+    lea rsi, [setting_persona]
+    mov edx, setting_persona_len
+    call equal_bytes
+    test al, al
+    jz .none
+    cmp byte [persona_dashboard_mode], 1
+    jne .persona_invalid
+    lea rax, [persona_dashboard_value]
+    mov edx, persona_dashboard_value_len
+    jmp .out
+.persona_invalid:
+    lea rax, [oversized_dashboard_message]
+    mov edx, oversized_dashboard_message_len
+    jmp .out
+.check_autorole:
     cmp byte [autorole_dashboard_mode], 0
     je .check_leveling
     cmp r12d, setting_autorole_len
@@ -1149,6 +1256,10 @@ dashboard_leveling_frame: db '{"op":0,"s":29,"t":"INTERACTION_CREATE","d":{"id":
 dashboard_leveling_frame_len equ $ - dashboard_leveling_frame
 dashboard_model_frame: db '{"op":0,"s":8,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model","component_type":2}}}'
 dashboard_model_frame_len equ $ - dashboard_model_frame
+dashboard_persona_frame: db '{"op":0,"s":30,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_persona","component_type":2}}}'
+dashboard_persona_frame_len equ $ - dashboard_persona_frame
+dashboard_setpersona_frame: db '{"op":0,"s":31,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_setpersona","component_type":2}}}'
+dashboard_setpersona_frame_len equ $ - dashboard_setpersona_frame
 dashboard_model_llama_frame: db '{"op":0,"s":9,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_llama70b","component_type":2}}}'
 dashboard_model_llama_frame_len equ $ - dashboard_model_llama_frame
 dashboard_model_gpt120_frame: db '{"op":0,"s":10,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_gpt120b","component_type":2}}}'
@@ -1220,6 +1331,16 @@ dashboard_leveling_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[
 dashboard_leveling_dynamic_response_len equ $ - dashboard_leveling_dynamic_response
 dashboard_leveling_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16766720,"title":"Leveling","fields":[{"name":"Level-up Channel","value":"(notif di channel chat)"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Level Channel","custom_id":"dash_setlevelchannel"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_leveling_fallback_response_len equ $ - dashboard_leveling_fallback_response
+dashboard_model_default_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","fields":[{"name":"Model Saat Ini","value":"`llama-3.3-70b-versatile`"},{"name":"Pilihan Model","value":"`llama70b` ', 0xe2, 0x86, 0x92, ' llama-3.3-70b-versatile', 0x5c, 'n`gpt120b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-120b', 0x5c, 'n`gpt20b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-20b', 0x5c, 'n`qwen32b` ', 0xe2, 0x86, 0x92, ' qwen/qwen3-32b"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_model_default_response_len equ $ - dashboard_model_default_response
+dashboard_model_qwen_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","fields":[{"name":"Model Saat Ini","value":"`qwen/qwen3-32b`"},{"name":"Pilihan Model","value":"`llama70b` ', 0xe2, 0x86, 0x92, ' llama-3.3-70b-versatile', 0x5c, 'n`gpt120b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-120b', 0x5c, 'n`gpt20b` ', 0xe2, 0x86, 0x92, ' openai/gpt-oss-20b', 0x5c, 'n`qwen32b` ', 0xe2, 0x86, 0x92, ' qwen/qwen3-32b"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_model_qwen_response_len equ $ - dashboard_model_qwen_response
+dashboard_persona_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":14365436,"title":"Persona Bot","fields":[{"name":"System Prompt Sekarang","value":"Halo ', 0x5c, '"persona', 0x5c, '"', 0x5c, 0x5c, 0x5c, 'naman"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Edit Persona","custom_id":"dash_setpersona"},{"type":2,"style":4,"label":"Reset ke Default","custom_id":"dash_resetpersona"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_persona_dynamic_response_len equ $ - dashboard_persona_dynamic_response
+dashboard_persona_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":14365436,"title":"Persona Bot","fields":[{"name":"System Prompt Sekarang","value":"You are CaineASM, a concise Discord assistant."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Edit Persona","custom_id":"dash_setpersona"},{"type":2,"style":4,"label":"Reset ke Default","custom_id":"dash_resetpersona"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_persona_fallback_response_len equ $ - dashboard_persona_fallback_response
+dashboard_persona_modal_dynamic_response: db '{"type":9,"data":{"custom_id":"modal_setpersona","title":"Edit Persona Bot","components":[{"type":1,"components":[{"type":4,"custom_id":"prompt","label":"System Prompt","style":2,"required":true,"value":"Halo ', 0x5c, '"persona', 0x5c, '"', 0x5c, 0x5c, 0x5c, 'naman"}]}]}}'
+dashboard_persona_modal_dynamic_response_len equ $ - dashboard_persona_modal_dynamic_response
 dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
@@ -1244,6 +1365,10 @@ model_id_gpt20: db 'openai/gpt-oss-20b'
 model_id_gpt20_len equ $ - model_id_gpt20
 model_id_qwen: db 'qwen/qwen3-32b'
 model_id_qwen_len equ $ - model_id_qwen
+invalid_model_id: db 'untrusted-model'
+invalid_model_id_len equ $ - invalid_model_id
+persona_dashboard_value: db 'Halo "persona"', 0x5c, 10, 'aman'
+persona_dashboard_value_len equ $ - persona_dashboard_value
 model_llama_saved_response: db 'Model diganti ke llama-3.3-70b-versatile.'
 model_llama_saved_response_len equ $ - model_llama_saved_response
 model_gpt120_saved_response: db 'Model diganti ke openai/gpt-oss-120b.'
@@ -1351,6 +1476,8 @@ general_log_mode: db 0
 welcome_dashboard_mode: db 0
 autorole_dashboard_mode: db 0
 leveling_dashboard_mode: db 0
+model_dashboard_mode: db 0
+persona_dashboard_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18
