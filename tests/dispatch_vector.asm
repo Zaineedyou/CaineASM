@@ -58,8 +58,11 @@ global bot_prefix_len
 global gateway_bot_user_id
 global gateway_bot_user_id_len
 global discord_get_json
+global discord_get_channel_messages
+global discord_bulk_delete_messages
 
 %define SYS_EXIT 60
+%define SYS_TIME 201
 %define VISION_NONE 0
 %define VISION_OK 1
 %define VISION_FETCH_FAIL 2
@@ -71,6 +74,11 @@ global discord_get_json
 %define TARGET_VALID 1
 %define TARGET_MALFORMED 2
 %define TARGET_ERROR 3
+%define CLEAR_SNAPSHOT_NONE 0
+%define CLEAR_SNAPSHOT_SAFE 1
+%define CLEAR_SNAPSHOT_OLD 2
+%define CLEAR_SNAPSHOT_DUPLICATE 3
+%define CLEAR_SNAPSHOT_MALFORMED 4
 
 section .text
 _start:
@@ -81,6 +89,24 @@ _start:
     mov dword [vision_sequence], 0
     mov byte [rate_allowed], 1
     mov dword [reply_mode], REPLY_NONE
+    mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_NONE
+    mov qword [clear_get_calls], 0
+    mov qword [clear_bulk_calls], 0
+    mov eax, SYS_TIME
+    xor edi, edi
+    syscall
+    test rax, rax
+    jle .fail
+    imul rax, rax, 1000
+    mov r8, 1420070400000
+    sub rax, r8
+    js .fail
+    imul rax, rax, 4194304
+    jo .fail
+    mov [clear_test_snowflake], rax
+    call build_clear_runtime_fixture
+    test eax, eax
+    js .fail
     lea rax, [groq_prompt]
     mov [expected_groq_ptr], rax
     mov dword [expected_groq_len], groq_prompt_len
@@ -1377,6 +1403,105 @@ _start:
     cmp qword [send_calls], 67
     jne .fail
 
+    ; Clear requires effective MANAGE_MESSAGES for caller and bot, excludes
+    ; the invocation itself, and will not mutate when a bounded snapshot is
+    ; stale, duplicate, malformed, or otherwise uncertain.
+    mov dword [failure_stage], 69
+    mov byte [bot_permission_enabled], 1
+    mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_SAFE
+    lea rax, [clear_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], clear_success_response_len
+    lea rdi, [clear_event_runtime]
+    mov esi, [clear_event_runtime_len]
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 1
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 68
+    jne .fail
+
+    mov dword [failure_stage], 70
+    lea rax, [clear_usage_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], clear_usage_response_len
+    lea rdi, [clear_invalid_event]
+    mov esi, clear_invalid_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 1
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 69
+    jne .fail
+
+    mov dword [failure_stage], 71
+    mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_OLD
+    lea rax, [moderation_error_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], moderation_error_response_len
+    lea rdi, [clear_event]
+    mov esi, clear_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 2
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 70
+    jne .fail
+
+    mov dword [failure_stage], 72
+    mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_DUPLICATE
+    lea rdi, [clear_event]
+    mov esi, clear_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 3
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 71
+    jne .fail
+
+    mov dword [failure_stage], 73
+    mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_MALFORMED
+    lea rdi, [clear_event]
+    mov esi, clear_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 4
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 72
+    jne .fail
+
+    mov dword [failure_stage], 74
+    mov byte [bot_permission_enabled], 0
+    lea rax, [bot_denied_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], bot_denied_response_len
+    lea rdi, [clear_event]
+    mov esi, clear_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [clear_get_calls], 4
+    jne .fail
+    cmp qword [clear_bulk_calls], 1
+    jne .fail
+    cmp qword [send_calls], 73
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -1634,6 +1759,203 @@ discord_get_json:
     pop r12
     ret
 
+; RDI=channel, ESI=length, RDX=response, ECX=capacity, R8D=limit.
+; This fixture returns only bounded complete channel snapshots for clear.
+discord_get_channel_messages:
+    push r12
+    push r13
+    mov r12, rdx
+    mov r13d, ecx
+    cmp esi, channel_id_len
+    jne .bad
+    cmp r8d, 3
+    jne .bad
+    lea rsi, [channel_id]
+    mov edx, channel_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [clear_get_calls]
+    cmp dword [clear_snapshot_mode], CLEAR_SNAPSHOT_SAFE
+    je .safe
+    cmp dword [clear_snapshot_mode], CLEAR_SNAPSHOT_OLD
+    je .old
+    cmp dword [clear_snapshot_mode], CLEAR_SNAPSHOT_DUPLICATE
+    je .duplicate
+    cmp dword [clear_snapshot_mode], CLEAR_SNAPSHOT_MALFORMED
+    je .malformed
+    jmp .bad
+.safe:
+    lea rsi, [clear_snapshot_safe_runtime]
+    mov edx, [clear_snapshot_safe_runtime_len]
+    jmp .copy
+.old:
+    lea rsi, [clear_snapshot_old]
+    mov edx, clear_snapshot_old_len
+    jmp .copy
+.duplicate:
+    lea rsi, [clear_snapshot_duplicate]
+    mov edx, clear_snapshot_duplicate_len
+    jmp .copy
+.malformed:
+    lea rsi, [clear_snapshot_malformed]
+    mov edx, clear_snapshot_malformed_len
+.copy:
+    cmp r13d, edx
+    jbe .bad
+    mov rdi, r12
+    call copy_bytes
+    mov byte [r12 + rdx], 0
+    mov eax, edx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r13
+    pop r12
+    ret
+
+; RDI=channel, ESI=length, RDX=64-byte slots, ECX=count.
+discord_bulk_delete_messages:
+    push rbx
+    mov rbx, rdx
+    cmp esi, channel_id_len
+    jne .bad
+    cmp ecx, 2
+    jne .bad
+    lea rsi, [channel_id]
+    mov edx, channel_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    lea rsi, [clear_candidate_one_runtime]
+    mov edx, [clear_candidate_one_runtime_len]
+    call equal_bytes
+    test al, al
+    jz .bad
+    lea rdi, [rbx + 64]
+    lea rsi, [clear_candidate_two_runtime]
+    mov edx, [clear_candidate_two_runtime_len]
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [clear_bulk_calls]
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop rbx
+    ret
+
+; Builds one current invocation and two current candidate IDs in fixed test
+; buffers. EAX=0 on success; this helper never allocates memory.
+build_clear_runtime_fixture:
+    push rbx
+    push r12
+    mov r12, [clear_test_snowflake]
+    lea rdi, [clear_event_runtime]
+    lea rsi, [clear_event_prefix]
+    mov edx, clear_event_prefix_len
+    call copy_bytes
+    add rdi, rdx
+    mov rax, r12
+    call append_uint64_decimal
+    lea rsi, [clear_event_suffix]
+    mov edx, clear_event_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    lea rax, [clear_event_runtime]
+    sub rdi, rax
+    cmp edi, 511
+    ja .bad
+    mov [clear_event_runtime_len], edi
+
+    lea rdi, [clear_candidate_one_runtime]
+    mov rax, r12
+    inc rax
+    call append_uint64_decimal
+    lea rax, [clear_candidate_one_runtime]
+    sub rdi, rax
+    cmp edi, 63
+    ja .bad
+    mov [clear_candidate_one_runtime_len], edi
+
+    lea rdi, [clear_candidate_two_runtime]
+    mov rax, r12
+    add rax, 2
+    call append_uint64_decimal
+    lea rax, [clear_candidate_two_runtime]
+    sub rdi, rax
+    cmp edi, 63
+    ja .bad
+    mov [clear_candidate_two_runtime_len], edi
+
+    lea rdi, [clear_snapshot_safe_runtime]
+    lea rsi, [clear_snapshot_prefix]
+    mov edx, clear_snapshot_prefix_len
+    call copy_bytes
+    add rdi, rdx
+    mov rax, r12
+    call append_uint64_decimal
+    lea rsi, [clear_snapshot_middle]
+    mov edx, clear_snapshot_middle_len
+    call copy_bytes
+    add rdi, rdx
+    mov rax, r12
+    inc rax
+    call append_uint64_decimal
+    lea rsi, [clear_snapshot_middle]
+    mov edx, clear_snapshot_middle_len
+    call copy_bytes
+    add rdi, rdx
+    mov rax, r12
+    add rax, 2
+    call append_uint64_decimal
+    lea rsi, [clear_snapshot_suffix]
+    mov edx, clear_snapshot_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    lea rax, [clear_snapshot_safe_runtime]
+    sub rdi, rax
+    cmp edi, 255
+    ja .bad
+    mov [clear_snapshot_safe_runtime_len], edi
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; RAX=value, RDI=destination. RDI returns after the decimal value.
+append_uint64_decimal:
+    xor ecx, ecx
+    cmp rax, 0
+    jne .collect
+    mov byte [rdi], '0'
+    inc rdi
+    ret
+.collect:
+    xor edx, edx
+    mov r8, 10
+    div r8
+    push rdx
+    inc ecx
+    test rax, rax
+    jnz .collect
+.write:
+    pop rdx
+    add dl, '0'
+    mov [rdi], dl
+    inc rdi
+    dec ecx
+    jnz .write
+    ret
+
 ; RDI=guild, ESI=guild length, RDX=user, ECX=user length. EAX=current score.
 xp_get:
     mov eax, 42
@@ -1690,7 +2012,12 @@ discord_delete_message:
 channel_auth_resolve:
     cmp byte [bot_permission_enabled], 1
     jne .deny
+    cmp dword [clear_snapshot_mode], CLEAR_SNAPSHOT_NONE
+    jne .clear_permission
     mov rax, 0x10018000016
+    ret
+.clear_permission:
+    mov rax, 0x10018002016
     ret
 .deny:
     mov rax, -1
@@ -2370,6 +2697,30 @@ nick_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_
 nick_event_len equ $ - nick_event
 nick_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^nick <@555>   ","author":{"id":"user-2","bot":false}}}'
 nick_invalid_event_len equ $ - nick_invalid_event
+clear_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"1542329009700864000","guild_id":"guild-1","channel_id":"123456789012345678","content":"^clear 2","author":{"id":"user-2","bot":false}}}'
+clear_event_len equ $ - clear_event
+clear_invalid_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"1542329009700864000","guild_id":"guild-1","channel_id":"123456789012345678","content":"^clear 100","author":{"id":"user-2","bot":false}}}'
+clear_invalid_event_len equ $ - clear_invalid_event
+clear_candidate_one: db '1542329009700864001'
+clear_candidate_one_len equ $ - clear_candidate_one
+clear_candidate_two: db '1542329009700864002'
+clear_candidate_two_len equ $ - clear_candidate_two
+clear_event_prefix: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"'
+clear_event_prefix_len equ $ - clear_event_prefix
+clear_event_suffix: db '","guild_id":"guild-1","channel_id":"123456789012345678","content":"^clear 2","author":{"id":"user-2","bot":false}}}'
+clear_event_suffix_len equ $ - clear_event_suffix
+clear_snapshot_prefix: db '[{"id":"'
+clear_snapshot_prefix_len equ $ - clear_snapshot_prefix
+clear_snapshot_middle: db '"},{"id":"'
+clear_snapshot_middle_len equ $ - clear_snapshot_middle
+clear_snapshot_suffix: db '"}]'
+clear_snapshot_suffix_len equ $ - clear_snapshot_suffix
+clear_snapshot_old: db '[{"id":"1542329009700864000"},{"id":"175928847299117063"}]'
+clear_snapshot_old_len equ $ - clear_snapshot_old
+clear_snapshot_duplicate: db '[{"id":"1542329009700864000"},{"id":"1542329009700864001"},{"id":"1542329009700864001"}]'
+clear_snapshot_duplicate_len equ $ - clear_snapshot_duplicate
+clear_snapshot_malformed: db '[{"id":"1542329009700864000"}] trailing'
+clear_snapshot_malformed_len equ $ - clear_snapshot_malformed
 nick_target_expected: db '555'
 nick_target_len_expected equ $ - nick_target_expected
 nick_value_expected: db 'New Name'
@@ -2566,6 +2917,12 @@ warning_reply: db 'Warnings: 3.'
 warning_reply_len equ $ - warning_reply
 clearwarn_response: db 'Warnings cleared.'
 clearwarn_response_len equ $ - clearwarn_response
+clear_usage_response: db 'Usage: clear [1-99].'
+clear_usage_response_len equ $ - clear_usage_response
+clear_success_response: db 'Messages cleared.'
+clear_success_response_len equ $ - clear_success_response
+moderation_error_response: db 'Moderation request failed.'
+moderation_error_response_len equ $ - moderation_error_response
 report_saved_response: db 'Report sent to the guild log channel.'
 report_saved_response_len equ $ - report_saved_response
 report_log_text: db 'REPORT', 10, 'Reporter: <@112233445566778899>', 10, 'Target: <@555>', 10, 'Reason: flooding chat', 10, 'Channel: <#123456789012345678>'
@@ -2609,6 +2966,18 @@ expected_channel_len: dd 0
 report_followup_enabled: dd 0
 report_log_enabled: dd 0
 delete_calls: dq 0
+clear_get_calls: dq 0
+clear_bulk_calls: dq 0
+clear_snapshot_mode: dd CLEAR_SNAPSHOT_NONE
+clear_test_snowflake: dq 0
+clear_event_runtime_len: dd 0
+clear_snapshot_safe_runtime_len: dd 0
+clear_candidate_one_runtime_len: dd 0
+clear_candidate_two_runtime_len: dd 0
+clear_event_runtime: times 512 db 0
+clear_snapshot_safe_runtime: times 256 db 0
+clear_candidate_one_runtime: times 64 db 0
+clear_candidate_two_runtime: times 64 db 0
 automod_enabled: dd 0
 warnings_add_calls: dq 0
 warnings_get_calls: dq 0

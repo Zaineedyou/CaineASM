@@ -63,6 +63,8 @@ extern bot_prefix_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
 extern discord_get_json
+extern discord_get_channel_messages
+extern discord_bulk_delete_messages
 
 %define MESSAGE_CONTENT_CAP 2048
 %define CHANNEL_ID_CAP 64
@@ -82,6 +84,11 @@ extern discord_get_json
 %define REPLY_REFERENCE_RESPONSE_CAP 4096
 %define TARGET_MEMBER_URL_CAP 512
 %define TARGET_MEMBER_RESPONSE_CAP 4096
+%define CLEAR_RESPONSE_CAP 4096
+%define CLEAR_BATCH_MAX 100
+%define CLEAR_ID_CAP 64
+%define PERMISSION_MANAGE_MESSAGES 0x2000
+%define SYS_TIME 201
 %define PERMISSION_ADMINISTRATOR 8
 %define PERMISSION_KICK_MEMBERS 2
 %define PERMISSION_BAN_MEMBERS 4
@@ -102,6 +109,7 @@ extern discord_get_json
 %define CMD_KICK 10
 %define CMD_BAN 11
 %define CMD_TIMEOUT 12
+%define CMD_CLEAR 13
 %define CMD_LOCK 14
 %define CMD_UNLOCK 15
 %define CMD_SLOWMODE 16
@@ -402,6 +410,8 @@ dispatch_message_create:
     je .kick
     cmp eax, CMD_BAN
     je .ban
+    cmp eax, CMD_CLEAR
+    je .clear
     cmp eax, CMD_LOCK
     je .lock
     cmp eax, CMD_UNLOCK
@@ -1513,7 +1523,102 @@ dispatch_message_create:
     mov esi, unban_usage_response_len
     jmp .reply
 
+
+.clear:
+    mov r8, PERMISSION_MANAGE_MESSAGES
+    call dispatch_has_permission
+    test al, al
+    jz .admin_denied
+    mov r8, PERMISSION_MANAGE_MESSAGES
+    call dispatch_bot_has_permission
+    test al, al
+    jz .bot_denied
+    call dispatch_tail_after_command
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_parse_clear_limit
+    jc .clear_usage
+    mov [clear_amount], eax
+    inc eax
+    mov [clear_fetch_limit], eax
+
+    ; Resolve the invocation ID from a direct property of the MESSAGE_CREATE
+    ; payload object. Nested IDs (author, embeds, and similar data) are never
+    ; accepted, so malformed frames cannot place the invocation in a batch.
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [key_gateway_data]
+    mov ecx, key_gateway_data_len
+    call json_find_key
+    test rax, rax
+    jz .moderation_error
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .moderation_error
+    mov rsi, rax
+    mov rdi, rbx
+    lea rdx, [clear_invocation_id]
+    mov ecx, CLEAR_ID_CAP - 1
+    call dispatch_json_object_direct_id
+    test eax, eax
+    jle .moderation_error
+    mov [clear_invocation_id_len], eax
+
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    lea rdx, [clear_snapshot]
+    mov ecx, CLEAR_RESPONSE_CAP
+    mov r8d, [clear_fetch_limit]
+    call discord_get_channel_messages
+    test rax, rax
+    js .moderation_error
+    cmp rax, CLEAR_RESPONSE_CAP - 1
+    jae .moderation_error
+    mov [clear_snapshot_len], eax
+    lea rdi, [clear_snapshot]
+    mov esi, [clear_snapshot_len]
+    call dispatch_parse_clear_snapshot
+    test eax, eax
+    js .moderation_error
+    mov [clear_batch_count], eax
+    test eax, eax
+    jz .clear_empty
+    cmp eax, 1
+    jne .clear_bulk
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    lea rdx, [clear_message_ids]
+    mov ecx, [clear_message_id_lens]
+    call discord_delete_message
+    test eax, eax
+    jnz .moderation_error
+    jmp .clear_success
+.clear_bulk:
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    lea rdx, [clear_message_ids]
+    mov ecx, [clear_batch_count]
+    call discord_bulk_delete_messages
+    test eax, eax
+    jnz .moderation_error
+.clear_success:
+    lea rdi, [clear_success_response]
+    mov esi, clear_success_response_len
+    jmp .reply
+.clear_empty:
+    lea rdi, [clear_empty_response]
+    mov esi, clear_empty_response_len
+    jmp .reply
+.clear_usage:
+    lea rdi, [clear_usage_response]
+    mov esi, clear_usage_response_len
+    jmp .reply
+
 .clearwarn:
+
     mov r8, PERMISSION_KICK_MEMBERS
     call dispatch_has_permission
     test al, al
@@ -2100,6 +2205,820 @@ dispatch_tail_after_mention:
 .empty:
     add rdi, rsi
     xor esi, esi
+    ret
+
+; RDI=tail bytes, ESI=len. EAX=amount 1..99, CF=0; an empty tail defaults
+; to 10. Only one decimal token plus trailing ASCII whitespace is accepted.
+dispatch_parse_clear_limit:
+    xor eax, eax
+    test esi, esi
+    jle .default
+    xor ecx, ecx
+.digits:
+    cmp ecx, esi
+    jae .done
+    movzx edx, byte [rdi + rcx]
+    cmp dl, '0'
+    jb .space_or_bad
+    cmp dl, '9'
+    ja .space_or_bad
+    imul eax, eax, 10
+    sub edx, '0'
+    add eax, edx
+    cmp eax, CLEAR_BATCH_MAX - 1
+    ja .bad
+    inc ecx
+    jmp .digits
+.space_or_bad:
+    test ecx, ecx
+    jz .bad
+    cmp dl, ' '
+    je .tail
+    cmp dl, 9
+    je .tail
+    cmp dl, 10
+    je .tail
+    cmp dl, 13
+    jne .bad
+.tail:
+    inc ecx
+.tail_loop:
+    cmp ecx, esi
+    jae .done
+    mov dl, [rdi + rcx]
+    cmp dl, ' '
+    je .tail_next
+    cmp dl, 9
+    je .tail_next
+    cmp dl, 10
+    je .tail_next
+    cmp dl, 13
+    jne .bad
+.tail_next:
+    inc ecx
+    jmp .tail_loop
+.done:
+    test eax, eax
+    jz .bad
+    clc
+    ret
+.default:
+    mov eax, 10
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; RDI=snapshot, ESI=length. EAX=eligible target count (0..99) or -1.
+; The snapshot must be one complete array of complete objects, contain the
+; invocation exactly once, and provide only unique current snowflakes. Every
+; non-invocation message is age-checked before its ID enters the delete table.
+dispatch_parse_clear_snapshot:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    mov r12, rdi
+    lea r13, [rdi + rsi]
+    cld
+    lea rdi, [clear_seen_ids]
+    xor eax, eax
+    mov ecx, CLEAR_BATCH_MAX * CLEAR_ID_CAP
+    rep stosb
+    lea rdi, [clear_message_ids]
+    mov ecx, CLEAR_BATCH_MAX * CLEAR_ID_CAP
+    rep stosb
+    mov dword [clear_batch_count], 0
+    mov dword [clear_invocation_found], 0
+    mov dword [clear_json_depth], 0
+    xor r15d, r15d
+    mov r14, r12
+    mov rdi, r14
+    mov rsi, r13
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r13
+    jae .bad
+    cmp byte [r14], '['
+    jne .bad
+    inc r14
+.object_next:
+    mov rdi, r14
+    mov rsi, r13
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r13
+    jae .bad
+    cmp byte [r14], ']'
+    je .array_done
+    cmp byte [r14], '{'
+    jne .bad
+    mov rdi, r14
+    mov rsi, r13
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, r14
+    mov rsi, rbx
+    lea rdx, [clear_current_id]
+    mov ecx, CLEAR_ID_CAP - 1
+    call dispatch_json_object_direct_id
+    test eax, eax
+    jle .bad
+    mov [clear_current_id_len], eax
+    cmp r15d, [clear_fetch_limit]
+    jae .bad
+    lea rdi, [clear_seen_ids]
+    mov esi, r15d
+    lea rdx, [clear_current_id]
+    mov ecx, eax
+    call dispatch_clear_table_contains
+    test al, al
+    jnz .bad
+    lea rdi, [clear_seen_ids]
+    mov esi, r15d
+    lea rdx, [clear_current_id]
+    mov ecx, [clear_current_id_len]
+    xor r8d, r8d
+    call dispatch_clear_store_slot
+    test eax, eax
+    js .bad
+    inc r15d
+
+    mov eax, [clear_current_id_len]
+    cmp eax, [clear_invocation_id_len]
+    jne .eligible
+    lea rdi, [clear_current_id]
+    lea rsi, [clear_invocation_id]
+    mov edx, eax
+    call dispatch_bytes_equal
+    test al, al
+    jz .eligible
+    inc dword [clear_invocation_found]
+    cmp dword [clear_invocation_found], 1
+    ja .bad
+    jmp .after_object
+.eligible:
+    lea rdi, [clear_current_id]
+    mov esi, [clear_current_id_len]
+    call dispatch_clear_snowflake_recent
+    test al, al
+    jz .bad
+    mov eax, [clear_batch_count]
+    cmp eax, CLEAR_BATCH_MAX
+    jae .bad
+    lea rdi, [clear_message_ids]
+    mov esi, eax
+    lea rdx, [clear_current_id]
+    mov ecx, [clear_current_id_len]
+    lea r8, [clear_message_id_lens]
+    call dispatch_clear_store_slot
+    test eax, eax
+    js .bad
+    inc dword [clear_batch_count]
+.after_object:
+    mov r14, rbx
+    mov rdi, r14
+    mov rsi, r13
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r13
+    jae .bad
+    cmp byte [r14], ','
+    je .comma
+    cmp byte [r14], ']'
+    je .array_done
+    jmp .bad
+.comma:
+    inc r14
+    jmp .object_next
+.array_done:
+    inc r14
+    mov rdi, r14
+    mov rsi, r13
+    call dispatch_json_skip_ws
+    cmp rax, r13
+    jne .bad
+    cmp dword [clear_invocation_found], 1
+    jne .bad
+    mov eax, [clear_batch_count]
+    cmp eax, [clear_amount]
+    ja .bad
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=object, RSI=first byte after its matching brace, RDX=destination,
+; ECX=destination capacity. EAX=direct top-level decimal `id` length or -1.
+dispatch_json_object_direct_id:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .bad
+    test rdx, rdx
+    jz .bad
+    test ecx, ecx
+    jle .bad
+    cmp byte [rdi], '{'
+    jne .bad
+    mov r12, rdx
+    mov r13d, ecx
+    mov rbx, rsi
+    lea r14, [rdi + 1]
+    xor r15d, r15d
+.property:
+    mov rdi, r14
+    mov rsi, rbx
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, rbx
+    jae .bad
+    cmp byte [r14], '}'
+    je .done
+    cmp byte [r14], 0x22
+    jne .bad
+    mov rdi, r14
+    mov rsi, rbx
+    lea rdx, [clear_string_scratch]
+    mov ecx, CLEAR_RESPONSE_CAP - 1
+    call json_read_string
+    test eax, eax
+    js .bad
+    mov r14, rdx
+    xor r9d, r9d
+    cmp eax, 2
+    jne .key_done
+    cmp byte [clear_string_scratch], 'i'
+    jne .key_done
+    cmp byte [clear_string_scratch + 1], 'd'
+    jne .key_done
+    mov r9d, 1
+.key_done:
+    mov rdi, r14
+    mov rsi, rbx
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, rbx
+    jae .bad
+    cmp byte [r14], ':'
+    jne .bad
+    inc r14
+    mov rdi, r14
+    mov rsi, rbx
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, rbx
+    jae .bad
+    test r9d, r9d
+    jz .skip_value
+    test r15d, r15d
+    jnz .bad
+    cmp byte [r14], 0x22
+    jne .bad
+    mov rdi, r14
+    mov rsi, rbx
+    mov rdx, r12
+    mov ecx, r13d
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov r15d, eax
+    mov r14, rdx
+    mov byte [r12 + r15], 0
+    mov rdi, r12
+    mov esi, r15d
+    call dispatch_clear_decimal_id
+    test al, al
+    jz .bad
+    jmp .after_value
+.skip_value:
+    mov rdi, r14
+    mov rsi, rbx
+    call dispatch_json_skip_value
+    test rax, rax
+    jz .bad
+    mov r14, rax
+.after_value:
+    mov rdi, r14
+    mov rsi, rbx
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, rbx
+    jae .bad
+    cmp byte [r14], ','
+    je .next_property
+    cmp byte [r14], '}'
+    jne .bad
+.done:
+    lea rax, [r14 + 1]
+    cmp rax, rbx
+    jne .bad
+    test r15d, r15d
+    jz .bad
+    mov eax, r15d
+    jmp .out
+.next_property:
+    inc r14
+    jmp .property
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=pointer, RSI=exclusive end. RAX=first non-ASCII-whitespace pointer.
+dispatch_json_skip_ws:
+    mov rax, rdi
+.loop:
+    cmp rax, rsi
+    jae .out
+    mov dl, [rax]
+    cmp dl, ' '
+    je .advance
+    cmp dl, 9
+    je .advance
+    cmp dl, 10
+    je .advance
+    cmp dl, 13
+    jne .out
+.advance:
+    inc rax
+    jmp .loop
+.out:
+    ret
+
+; RDI=value start, RSI=exclusive end. RAX=first byte after exactly one valid
+; bounded JSON value, or zero. This is deliberately strict: object/array
+; delimiters, JSON number grammar, strings, and true/false/null are validated
+; rather than merely skipped by brace depth.
+dispatch_json_skip_value:
+    push rbx
+    push r12
+    push r13
+    push r14
+    test rdi, rdi
+    jz .bad
+    cmp rdi, rsi
+    jae .bad
+    mov r12, rsi
+    mov r14, rdi
+    cmp byte [r14], 0x22
+    je .string
+    cmp byte [r14], '{'
+    je .object
+    cmp byte [r14], '['
+    je .array
+    cmp byte [r14], 't'
+    je .true
+    cmp byte [r14], 'f'
+    je .false
+    cmp byte [r14], 'n'
+    je .null
+    cmp byte [r14], '-'
+    je .number
+    cmp byte [r14], '0'
+    jb .bad
+    cmp byte [r14], '9'
+    ja .bad
+.number:
+    cmp byte [r14], '-'
+    jne .number_integer
+    inc r14
+    cmp r14, r12
+    jae .bad
+.number_integer:
+    cmp byte [r14], '0'
+    jne .number_nonzero
+    inc r14
+    cmp r14, r12
+    jae .number_fraction
+    mov al, [r14]
+    cmp al, '0'
+    jb .number_fraction
+    cmp al, '9'
+    jbe .bad
+    jmp .number_fraction
+.number_nonzero:
+    cmp byte [r14], '1'
+    jb .bad
+    cmp byte [r14], '9'
+    ja .bad
+.number_digits:
+    inc r14
+    cmp r14, r12
+    jae .number_fraction
+    mov al, [r14]
+    cmp al, '0'
+    jb .number_fraction
+    cmp al, '9'
+    jbe .number_digits
+.number_fraction:
+    cmp r14, r12
+    jae .number_done
+    cmp byte [r14], '.'
+    jne .number_exponent
+    inc r14
+    cmp r14, r12
+    jae .bad
+    cmp byte [r14], '0'
+    jb .bad
+    cmp byte [r14], '9'
+    ja .bad
+.fraction_digits:
+    inc r14
+    cmp r14, r12
+    jae .number_done
+    mov al, [r14]
+    cmp al, '0'
+    jb .number_exponent
+    cmp al, '9'
+    jbe .fraction_digits
+.number_exponent:
+    cmp r14, r12
+    jae .number_done
+    mov al, [r14]
+    cmp al, 'e'
+    je .exponent
+    cmp al, 'E'
+    jne .number_done
+.exponent:
+    inc r14
+    cmp r14, r12
+    jae .bad
+    mov al, [r14]
+    cmp al, '+'
+    je .exponent_sign
+    cmp al, '-'
+    jne .exponent_first
+.exponent_sign:
+    inc r14
+    cmp r14, r12
+    jae .bad
+.exponent_first:
+    cmp byte [r14], '0'
+    jb .bad
+    cmp byte [r14], '9'
+    ja .bad
+.exponent_digits:
+    inc r14
+    cmp r14, r12
+    jae .number_done
+    mov al, [r14]
+    cmp al, '0'
+    jb .number_done
+    cmp al, '9'
+    jbe .exponent_digits
+.number_done:
+    mov rax, r14
+    jmp .out
+.true:
+    lea rax, [r14 + 4]
+    cmp rax, r12
+    ja .bad
+    cmp byte [r14 + 1], 'r'
+    jne .bad
+    cmp byte [r14 + 2], 'u'
+    jne .bad
+    cmp byte [r14 + 3], 'e'
+    jne .bad
+    jmp .out
+.false:
+    lea rax, [r14 + 5]
+    cmp rax, r12
+    ja .bad
+    cmp byte [r14 + 1], 'a'
+    jne .bad
+    cmp byte [r14 + 2], 'l'
+    jne .bad
+    cmp byte [r14 + 3], 's'
+    jne .bad
+    cmp byte [r14 + 4], 'e'
+    jne .bad
+    jmp .out
+.null:
+    lea rax, [r14 + 4]
+    cmp rax, r12
+    ja .bad
+    cmp byte [r14 + 1], 'u'
+    jne .bad
+    cmp byte [r14 + 2], 'l'
+    jne .bad
+    cmp byte [r14 + 3], 'l'
+    jne .bad
+    jmp .out
+.string:
+    lea rdx, [clear_string_scratch]
+    mov ecx, CLEAR_RESPONSE_CAP - 1
+    mov rdi, r14
+    mov rsi, r12
+    call json_read_string
+    test eax, eax
+    js .bad
+    mov rax, rdx
+    jmp .out
+.object:
+    inc dword [clear_json_depth]
+    cmp dword [clear_json_depth], 32
+    ja .bad_depth
+    inc r14
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    cmp byte [r14], '}'
+    je .object_close
+.object_property:
+    cmp byte [r14], 0x22
+    jne .bad_depth
+    lea rdx, [clear_string_scratch]
+    mov ecx, CLEAR_RESPONSE_CAP - 1
+    mov rdi, r14
+    mov rsi, r12
+    call json_read_string
+    test eax, eax
+    js .bad_depth
+    mov r14, rdx
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    cmp byte [r14], ':'
+    jne .bad_depth
+    inc r14
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_value
+    test rax, rax
+    jz .bad_depth
+    mov r14, rax
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    cmp byte [r14], ','
+    je .object_comma
+    cmp byte [r14], '}'
+    jne .bad_depth
+.object_close:
+    inc r14
+    dec dword [clear_json_depth]
+    mov rax, r14
+    jmp .out
+.object_comma:
+    inc r14
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    jmp .object_property
+.array:
+    inc dword [clear_json_depth]
+    cmp dword [clear_json_depth], 32
+    ja .bad_depth
+    inc r14
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    cmp byte [r14], ']'
+    je .array_close
+.array_value:
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_value
+    test rax, rax
+    jz .bad_depth
+    mov r14, rax
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    cmp byte [r14], ','
+    je .array_comma
+    cmp byte [r14], ']'
+    jne .bad_depth
+.array_close:
+    inc r14
+    dec dword [clear_json_depth]
+    mov rax, r14
+    jmp .out
+.array_comma:
+    inc r14
+    mov rdi, r14
+    mov rsi, r12
+    call dispatch_json_skip_ws
+    mov r14, rax
+    cmp r14, r12
+    jae .bad_depth
+    jmp .array_value
+.bad_depth:
+    dec dword [clear_json_depth]
+.bad:
+    xor eax, eax
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=bytes, ESI=len. AL=1 only for bounded non-empty ASCII decimal ID.
+dispatch_clear_decimal_id:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, CLEAR_ID_CAP - 1
+    ja .no
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    ja .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=table, ESI=entry count, RDX=ID, ECX=ID length. AL=1 iff present.
+dispatch_clear_table_contains:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov ebx, ecx
+    xor r8d, r8d
+.entry:
+    cmp r8d, r13d
+    jae .no
+    mov eax, r8d
+    imul rax, CLEAR_ID_CAP
+    lea rdi, [r12 + rax]
+    xor ecx, ecx
+.length:
+    cmp ecx, CLEAR_ID_CAP
+    jae .no
+    cmp byte [rdi + rcx], 0
+    je .compare
+    inc ecx
+    jmp .length
+.compare:
+    cmp ecx, ebx
+    jne .next
+    mov rsi, r14
+    mov edx, ebx
+    call dispatch_bytes_equal
+    test al, al
+    jnz .out
+.next:
+    inc r8d
+    jmp .entry
+.no:
+    xor eax, eax
+.out:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=table, ESI=index, RDX=ID, ECX=len, R8=optional dword length table.
+dispatch_clear_store_slot:
+    test rdi, rdi
+    jz .bad
+    test rdx, rdx
+    jz .bad
+    cmp esi, CLEAR_BATCH_MAX
+    jae .bad
+    test ecx, ecx
+    jle .bad
+    cmp ecx, CLEAR_ID_CAP - 1
+    ja .bad
+    mov eax, esi
+    imul rax, CLEAR_ID_CAP
+    add rdi, rax
+    xor eax, eax
+.copy:
+    cmp eax, ecx
+    jae .finish
+    mov r9b, [rdx + rax]
+    mov [rdi + rax], r9b
+    inc eax
+    jmp .copy
+.finish:
+    mov byte [rdi + rax], 0
+    test r8, r8
+    jz .ok
+    mov [r8 + rsi * 4], ecx
+.ok:
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+; RDI=decimal snowflake, ESI=len. AL=1 iff timestamp is no more than 14 days
+; old and not later than the current Unix clock. Decimal overflow is rejected.
+dispatch_clear_snowflake_recent:
+    push r12
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    xor eax, eax
+    xor ecx, ecx
+.digits:
+    cmp ecx, esi
+    jae .parsed
+    movzx edx, byte [rdi + rcx]
+    cmp dl, '0'
+    jb .no
+    cmp dl, '9'
+    ja .no
+    mov r9d, edx
+    sub r9d, '0'
+    mov r8d, 10
+    mul r8
+    test rdx, rdx
+    jnz .no
+    add rax, r9
+    jc .no
+    inc ecx
+    jmp .digits
+.parsed:
+    shr rax, 22
+    mov r8, 1420070400000
+    add rax, r8
+    jc .no
+    mov r12, rax
+    mov eax, SYS_TIME
+    xor edi, edi
+    syscall
+    test rax, rax
+    jle .no
+    imul rax, rax, 1000
+    jo .no
+    cmp r12, rax
+    ja .no
+    sub rax, 1209600000
+    cmp r12, rax
+    jb .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop r12
     ret
 
 ; RDI=tail bytes, ESI=len. EAX=1 (add), 2 (remove), or -1.
@@ -3260,6 +4179,8 @@ key_id: db 'id'
 key_id_len equ $ - key_id
 key_content: db 'content'
 key_content_len equ $ - key_content
+key_gateway_data: db 'd'
+key_gateway_data_len equ $ - key_gateway_data
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
 report_usage_response: db 'Usage: report @user [reason].'
@@ -3286,6 +4207,12 @@ warn_usage_response: db 'Usage: warn/clearwarn @user.'
 warn_usage_response_len equ $ - warn_usage_response
 clearwarn_response: db 'Warnings cleared.'
 clearwarn_response_len equ $ - clearwarn_response
+clear_usage_response: db 'Usage: clear [1-99].'
+clear_usage_response_len equ $ - clear_usage_response
+clear_success_response: db 'Messages cleared.'
+clear_success_response_len equ $ - clear_success_response
+clear_empty_response: db 'No eligible messages to clear.'
+clear_empty_response_len equ $ - clear_empty_response
 warning_reply_prefix: db 'Warnings: '
 warning_reply_prefix_len equ $ - warning_reply_prefix
 warning_reply_suffix: db '.'
@@ -3549,3 +4476,18 @@ target_member_url: resb TARGET_MEMBER_URL_CAP
 target_member_url_len: resd 1
 target_member_response: resb TARGET_MEMBER_RESPONSE_CAP
 target_member_response_len: resd 1
+clear_snapshot_len: resd 1
+clear_amount: resd 1
+clear_fetch_limit: resd 1
+clear_batch_count: resd 1
+clear_invocation_id_len: resd 1
+clear_invocation_found: resd 1
+clear_current_id_len: resd 1
+clear_json_depth: resd 1
+clear_snapshot: resb CLEAR_RESPONSE_CAP
+clear_string_scratch: resb CLEAR_RESPONSE_CAP
+clear_invocation_id: resb CLEAR_ID_CAP
+clear_current_id: resb CLEAR_ID_CAP
+clear_message_ids: resb CLEAR_BATCH_MAX * CLEAR_ID_CAP
+clear_message_id_lens: resd CLEAR_BATCH_MAX
+clear_seen_ids: resb CLEAR_BATCH_MAX * CLEAR_ID_CAP
