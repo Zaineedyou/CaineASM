@@ -3,6 +3,7 @@ DEFAULT REL
 global interaction_handle_gateway
 
 extern json_object_find_direct_key
+extern json_escape_append
 extern json_read_string
 extern json_read_uint
 extern json_object_end
@@ -34,6 +35,8 @@ extern gateway_last_heartbeat_latency_ms
 %define EPHEMERAL_FLAG 64
 %define PERMISSION_ADMINISTRATOR 0x8
 %define DASHBOARD_DYNAMIC_CAP 1024
+%define DASHBOARD_WELCOME_DYNAMIC_CAP 4096
+%define DASHBOARD_TEXT_RENDER_CAP 240
 
 section .text
 
@@ -553,8 +556,11 @@ interaction_handle_gateway:
     mov r9d, modal_setwelcome_response_len
     jmp .component_respond_json
 .component_welcome:
-    lea r8, [dashboard_welcome_response]
-    mov r9d, dashboard_welcome_response_len
+    call interaction_build_welcome_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_welcome_dynamic]
     jmp .component_respond_json
 .component_setlog:
     lea r8, [modal_setlog_response]
@@ -1056,6 +1062,269 @@ interaction_build_status_response:
 .bad:
     mov eax, -1
 .out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 Welcome/Goodbye dashboard response. Stored channel IDs are
+; emitted only after strict decimal validation. Stored templates must satisfy the
+; normal text policy and a stricter 240-byte display bound; otherwise lifecycle's
+; exact fallback template is rendered. Every selected template is JSON-escaped.
+; RAX=response length or -1 if any bounded append cannot be completed.
+interaction_build_welcome_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 80
+
+    ; Local layout: 0/8/12 welcome channel ptr/len/is-valid, 16/24/28 goodbye
+    ; channel, 32/40 welcome message, 48/56 goodbye message.
+    lea rax, [welcome_channel_unset]
+    mov [rsp], rax
+    mov dword [rsp + 8], welcome_channel_unset_len
+    mov dword [rsp + 12], 0
+    mov [rsp + 16], rax
+    mov dword [rsp + 24], welcome_channel_unset_len
+    mov dword [rsp + 28], 0
+    lea rax, [default_welcome_template]
+    mov [rsp + 32], rax
+    mov dword [rsp + 40], default_welcome_template_len
+    lea rax, [default_goodbye_template]
+    mov [rsp + 48], rax
+    mov dword [rsp + 56], default_goodbye_template_len
+
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_welcome_channel]
+    mov ecx, setting_welcome_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .goodbye_channel
+    test edx, edx
+    jle .goodbye_channel
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call decimal_id_valid
+    test al, al
+    jz .goodbye_channel
+    mov [rsp], r13
+    mov dword [rsp + 8], r14d
+    mov dword [rsp + 12], 1
+
+.goodbye_channel:
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_goodbye_channel]
+    mov ecx, setting_goodbye_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .welcome_message
+    test edx, edx
+    jle .welcome_message
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call decimal_id_valid
+    test al, al
+    jz .welcome_message
+    mov [rsp + 16], r13
+    mov dword [rsp + 24], r14d
+    mov dword [rsp + 28], 1
+
+.welcome_message:
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_welcome_message]
+    mov ecx, setting_welcome_message_len
+    call guild_config_get
+    test rax, rax
+    jz .goodbye_message
+    test edx, edx
+    jle .goodbye_message
+    cmp edx, DASHBOARD_TEXT_RENDER_CAP
+    ja .goodbye_message
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_text_valid
+    test al, al
+    jz .goodbye_message
+    mov [rsp + 32], r13
+    mov dword [rsp + 40], r14d
+
+.goodbye_message:
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_goodbye_message]
+    mov ecx, setting_goodbye_message_len
+    call guild_config_get
+    test rax, rax
+    jz .bound
+    test edx, edx
+    jle .bound
+    cmp edx, DASHBOARD_TEXT_RENDER_CAP
+    ja .bound
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_text_valid
+    test al, al
+    jz .bound
+    mov [rsp + 48], r13
+    mov dword [rsp + 56], r14d
+
+.bound:
+    ; Reserve the worst possible JSON escape expansion (six bytes per source
+    ; byte) before writing anything. The resulting body always leaves one byte
+    ; for a final NUL and remains within interaction callback capacity.
+    mov eax, dashboard_welcome_prefix_len
+    cmp dword [rsp + 12], 0
+    je .bound_welcome_unset
+    add eax, dashboard_welcome_channel_prefix_len
+    add eax, [rsp + 8]
+    add eax, dashboard_welcome_channel_suffix_len
+    jmp .bound_after_welcome_channel
+.bound_welcome_unset:
+    add eax, welcome_channel_unset_len
+.bound_after_welcome_channel:
+    add eax, dashboard_welcome_welcome_message_prefix_len
+    mov ecx, [rsp + 40]
+    imul ecx, ecx, 6
+    add eax, ecx
+    add eax, dashboard_welcome_goodbye_channel_prefix_len
+    cmp dword [rsp + 28], 0
+    je .bound_goodbye_unset
+    add eax, dashboard_welcome_channel_prefix_len
+    add eax, [rsp + 24]
+    add eax, dashboard_welcome_channel_suffix_len
+    jmp .bound_after_goodbye_channel
+.bound_goodbye_unset:
+    add eax, welcome_channel_unset_len
+.bound_after_goodbye_channel:
+    add eax, dashboard_welcome_goodbye_message_prefix_len
+    mov ecx, [rsp + 56]
+    imul ecx, ecx, 6
+    add eax, ecx
+    add eax, dashboard_welcome_suffix_len
+    cmp eax, DASHBOARD_WELCOME_DYNAMIC_CAP - 1
+    ja .bad
+
+    xor ebx, ebx
+    lea rdi, [dashboard_welcome_dynamic]
+    lea rsi, [dashboard_welcome_prefix]
+    mov edx, dashboard_welcome_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_prefix_len
+
+    cmp dword [rsp + 12], 0
+    je .write_welcome_unset
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_channel_prefix]
+    mov edx, dashboard_welcome_channel_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_channel_prefix_len
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    mov rsi, [rsp]
+    mov edx, [rsp + 8]
+    call interaction_copy_bytes
+    add ebx, [rsp + 8]
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_channel_suffix]
+    mov edx, dashboard_welcome_channel_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_channel_suffix_len
+    jmp .write_welcome_message_prefix
+.write_welcome_unset:
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [welcome_channel_unset]
+    mov edx, welcome_channel_unset_len
+    call interaction_copy_bytes
+    add ebx, welcome_channel_unset_len
+
+.write_welcome_message_prefix:
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_welcome_message_prefix]
+    mov edx, dashboard_welcome_welcome_message_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_welcome_message_prefix_len
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    mov esi, DASHBOARD_WELCOME_DYNAMIC_CAP - 1
+    sub esi, ebx
+    mov rdx, [rsp + 32]
+    mov ecx, [rsp + 40]
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_goodbye_channel_prefix]
+    mov edx, dashboard_welcome_goodbye_channel_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_goodbye_channel_prefix_len
+    cmp dword [rsp + 28], 0
+    je .write_goodbye_unset
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_channel_prefix]
+    mov edx, dashboard_welcome_channel_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_channel_prefix_len
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    mov rsi, [rsp + 16]
+    mov edx, [rsp + 24]
+    call interaction_copy_bytes
+    add ebx, [rsp + 24]
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_channel_suffix]
+    mov edx, dashboard_welcome_channel_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_channel_suffix_len
+    jmp .write_goodbye_message_prefix
+.write_goodbye_unset:
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [welcome_channel_unset]
+    mov edx, welcome_channel_unset_len
+    call interaction_copy_bytes
+    add ebx, welcome_channel_unset_len
+
+.write_goodbye_message_prefix:
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_goodbye_message_prefix]
+    mov edx, dashboard_welcome_goodbye_message_prefix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_goodbye_message_prefix_len
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    mov esi, DASHBOARD_WELCOME_DYNAMIC_CAP - 1
+    sub esi, ebx
+    mov rdx, [rsp + 48]
+    mov ecx, [rsp + 56]
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+
+    lea rdi, [dashboard_welcome_dynamic + rbx]
+    lea rsi, [dashboard_welcome_suffix]
+    mov edx, dashboard_welcome_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_welcome_suffix_len
+    mov byte [dashboard_welcome_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    add rsp, 80
     pop r15
     pop r14
     pop r13
@@ -2220,6 +2489,26 @@ health_probe_value: db 'cache_ping'
 health_probe_value_len equ $ - health_probe_value
 general_log_unset: db 'Belum diset'
 general_log_unset_len equ $ - general_log_unset
+welcome_channel_unset: db 'Belum diset'
+welcome_channel_unset_len equ $ - welcome_channel_unset
+default_welcome_template: db 'Selamat datang {user} di **{server}**!'
+default_welcome_template_len equ $ - default_welcome_template
+default_goodbye_template: db 'Selamat tinggal **{username}** dari **{server}**.'
+default_goodbye_template_len equ $ - default_goodbye_template
+dashboard_welcome_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","fields":[{"name":"Welcome Channel","value":"'
+dashboard_welcome_prefix_len equ $ - dashboard_welcome_prefix
+dashboard_welcome_channel_prefix: db '<#'
+dashboard_welcome_channel_prefix_len equ $ - dashboard_welcome_channel_prefix
+dashboard_welcome_channel_suffix: db '>'
+dashboard_welcome_channel_suffix_len equ $ - dashboard_welcome_channel_suffix
+dashboard_welcome_welcome_message_prefix: db '"},{"name":"Welcome Message","value":"`'
+dashboard_welcome_welcome_message_prefix_len equ $ - dashboard_welcome_welcome_message_prefix
+dashboard_welcome_goodbye_channel_prefix: db '`"},{"name":"Goodbye Channel","value":"'
+dashboard_welcome_goodbye_channel_prefix_len equ $ - dashboard_welcome_goodbye_channel_prefix
+dashboard_welcome_goodbye_message_prefix: db '"},{"name":"Goodbye Message","value":"`'
+dashboard_welcome_goodbye_message_prefix_len equ $ - dashboard_welcome_goodbye_message_prefix
+dashboard_welcome_suffix: db '`"},{"name":"Variabel","value":"`{user}` `{username}` `{server}` `{count}`"}]}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_welcome_suffix_len equ $ - dashboard_welcome_suffix
 dashboard_general_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"'
 dashboard_general_prefix_len equ $ - dashboard_general_prefix
 dashboard_general_suffix: db '"},{"name":"Disabled Channels","value":"Tidak ada atau tidak tercache."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -2332,3 +2621,4 @@ interaction_word_len: resd 1
 health_probe_reply: resb 1901
 dashboard_status_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_general_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_welcome_dynamic: resb DASHBOARD_WELCOME_DYNAMIC_CAP

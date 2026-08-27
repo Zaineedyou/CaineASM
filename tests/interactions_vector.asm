@@ -91,9 +91,10 @@ _start:
     mov byte [general_log_mode], 0
 
     mov dword [failure_stage], 6
-    lea rax, [dashboard_welcome_response]
+    mov byte [welcome_dashboard_mode], 1
+    lea rax, [dashboard_welcome_dynamic_response]
     mov [expected_json_ptr], rax
-    mov dword [expected_json_len], dashboard_welcome_response_len
+    mov dword [expected_json_len], dashboard_welcome_dynamic_response_len
     lea rdi, [dashboard_welcome_frame]
     mov esi, dashboard_welcome_frame_len
     call interaction_handle_gateway
@@ -103,6 +104,20 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 7
+    mov byte [welcome_dashboard_mode], 2
+    lea rax, [dashboard_welcome_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_welcome_fallback_response_len
+    lea rdi, [dashboard_welcome_frame]
+    mov esi, dashboard_welcome_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 5
+    jne .fail
+    mov byte [welcome_dashboard_mode], 0
+
+    mov dword [failure_stage], 8
     lea rax, [dashboard_model_response]
     mov [expected_json_ptr], rax
     mov dword [expected_json_len], dashboard_model_response_len
@@ -111,10 +126,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 5
+    cmp qword [json_callback_calls], 6
     jne .fail
 
-    mov dword [failure_stage], 8
+    mov dword [failure_stage], 9
     lea rax, [model_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], model_guild_id_len
@@ -197,7 +212,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 6
+    cmp qword [json_callback_calls], 7
     jne .fail
 
     mov dword [failure_stage], 13
@@ -474,7 +489,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 7
+    cmp qword [json_callback_calls], 8
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -504,7 +519,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 8
+    cmp qword [json_callback_calls], 9
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -520,7 +535,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 9
+    cmp qword [json_callback_calls], 10
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -553,7 +568,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 9
+    cmp qword [json_callback_calls], 10
     jne .fail
 
     mov dword [failure_stage], 31
@@ -608,20 +623,101 @@ _start:
 ; Bounded healthcheck seams: no network and no durable store are accessed by
 ; this vector. Dedicated cases below can control their success bits.
 guild_config_get:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12d, ecx
+    cmp byte [welcome_dashboard_mode], 0
+    je .not_welcome
+    cmp r12d, setting_welcome_channel_len
+    jne .check_goodbye_channel
+    mov rdi, rbx
+    lea rsi, [setting_welcome_channel]
+    mov edx, setting_welcome_channel_len
+    call equal_bytes
+    test al, al
+    jz .check_goodbye_channel
+    cmp byte [welcome_dashboard_mode], 1
+    jne .fallback_welcome_channel
+    lea rax, [welcome_channel_id]
+    mov edx, welcome_channel_id_len
+    jmp .out
+.fallback_welcome_channel:
+    lea rax, [invalid_channel_id]
+    mov edx, invalid_channel_id_len
+    jmp .out
+.check_goodbye_channel:
+    cmp r12d, setting_goodbye_channel_len
+    jne .check_welcome_message
+    mov rdi, rbx
+    lea rsi, [setting_goodbye_channel]
+    mov edx, setting_goodbye_channel_len
+    call equal_bytes
+    test al, al
+    jz .check_welcome_message
+    cmp byte [welcome_dashboard_mode], 1
+    jne .none
+    lea rax, [goodbye_channel_id]
+    mov edx, goodbye_channel_id_len
+    jmp .out
+.check_welcome_message:
+    cmp r12d, setting_welcome_message_len
+    jne .check_goodbye_message
+    mov rdi, rbx
+    lea rsi, [setting_welcome_message]
+    mov edx, setting_welcome_message_len
+    call equal_bytes
+    test al, al
+    jz .check_goodbye_message
+    cmp byte [welcome_dashboard_mode], 1
+    jne .fallback_welcome_message
+    lea rax, [welcome_dashboard_message]
+    mov edx, welcome_dashboard_message_len
+    jmp .out
+.fallback_welcome_message:
+    lea rax, [oversized_dashboard_message]
+    mov edx, oversized_dashboard_message_len
+    jmp .out
+.check_goodbye_message:
+    cmp r12d, setting_goodbye_message_len
+    jne .none
+    mov rdi, rbx
+    lea rsi, [setting_goodbye_message]
+    mov edx, setting_goodbye_message_len
+    call equal_bytes
+    test al, al
+    jz .none
+    cmp byte [welcome_dashboard_mode], 1
+    jne .fallback_goodbye_message
+    lea rax, [goodbye_message]
+    mov edx, goodbye_message_len
+    jmp .out
+.fallback_goodbye_message:
+    lea rax, [invalid_dashboard_message]
+    mov edx, invalid_dashboard_message_len
+    jmp .out
+.not_welcome:
     cmp byte [general_log_mode], 0
     je .not_general
     lea rax, [general_log_channel]
     mov edx, general_log_channel_len
-    ret
+    jmp .out
 .not_general:
     cmp byte [status_history_mode], 0
     je .health
     lea rax, [history_limit]
     mov edx, history_limit_len
-    ret
+    jmp .out
 .health:
     lea rax, [health_probe_value]
     mov edx, health_probe_value_len
+    jmp .out
+.none:
+    xor eax, eax
+    xor edx, edx
+.out:
+    pop r12
+    pop rbx
     ret
 
 groq_select_guild:
@@ -1008,8 +1104,10 @@ dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":579
 dashboard_back_response_len equ $ - dashboard_back_response
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
-dashboard_welcome_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","description":"Atur channel dan pesan melalui tombol di bawah."}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
-dashboard_welcome_response_len equ $ - dashboard_welcome_response
+dashboard_welcome_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","fields":[{"name":"Welcome Channel","value":"<#111111111111111111>"},{"name":"Welcome Message","value":"`Halo ', 0x5c, '"Caine', 0x5c, '"', 0x5c, 0x5c, 0x5c, 'n{user}`"},{"name":"Goodbye Channel","value":"<#222222222222222222>"},{"name":"Goodbye Message","value":"`Sampai jumpa {username}`"},{"name":"Variabel","value":"`{user}` `{username}` `{server}` `{count}`"}]}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_welcome_dynamic_response_len equ $ - dashboard_welcome_dynamic_response
+dashboard_welcome_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","fields":[{"name":"Welcome Channel","value":"Belum diset"},{"name":"Welcome Message","value":"`Selamat datang {user} di **{server}**!`"},{"name":"Goodbye Channel","value":"Belum diset"},{"name":"Goodbye Message","value":"`Selamat tinggal **{username}** dari **{server}**.`"},{"name":"Variabel","value":"`{user}` `{username}` `{server}` `{count}`"}]}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_welcome_fallback_response_len equ $ - dashboard_welcome_fallback_response
 dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
@@ -1058,6 +1156,14 @@ goodbye_channel_id: db '222222222222222222'
 goodbye_channel_id_len equ $ - goodbye_channel_id
 welcome_message: db 'Selamat datang {user}'
 welcome_message_len equ $ - welcome_message
+welcome_dashboard_message: db 'Halo "Caine"', 0x5c, 10, '{user}'
+welcome_dashboard_message_len equ $ - welcome_dashboard_message
+invalid_channel_id: db 'not-a-snowflake'
+invalid_channel_id_len equ $ - invalid_channel_id
+invalid_dashboard_message: db 'bad', 1
+invalid_dashboard_message_len equ $ - invalid_dashboard_message
+oversized_dashboard_message: times 241 db 'x'
+oversized_dashboard_message_len equ $ - oversized_dashboard_message
 goodbye_message: db 'Sampai jumpa {username}'
 goodbye_message_len equ $ - goodbye_message
 setting_welcome_channel: db 'welcome_channel'
@@ -1130,6 +1236,7 @@ autorole_hierarchy_allowed: db 0
 health_permission_allowed: db 1
 status_history_mode: db 0
 general_log_mode: db 0
+welcome_dashboard_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18
