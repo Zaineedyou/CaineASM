@@ -575,9 +575,10 @@ dispatch_message_create:
 .chat_done:
     test eax, eax
     jle .ai_error
+    mov [ai_reply_len], eax
     lea rdi, [ai_reply]
     mov esi, eax
-    jmp .reply
+    jmp .chat_reply
 .summarize:
 .skip_prompt_spaces:
     cmp ebx, r15d
@@ -1806,6 +1807,14 @@ dispatch_message_create:
     lea rdi, [reset_response]
     mov esi, reset_response_len
     jmp .reply
+.chat_reply:
+    mov rdx, rdi
+    mov ecx, esi
+    lea rdi, [channel_id]
+    mov esi, r14d
+    call discord_send_text
+    call dispatch_log_chat
+    jmp .out
 .reply:
     mov rdx, rdi
     mov ecx, esi
@@ -4145,6 +4154,128 @@ command_offset_after_prefix:
     mov eax, -1
     ret
 
+; Sends a bounded chat audit to the configured guild log channel after a
+; successful AI response is sent. Missing, malformed, or unsafe log configuration
+; fails closed and never changes the user-facing response path.
+dispatch_log_chat:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    cmp dword [guild_id_len], 0
+    jle .out
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .out
+    test edx, edx
+    jle .out
+    cmp edx, CHANNEL_ID_CAP - 1
+    ja .out
+    mov r12, rax
+    mov r13d, edx
+    mov rdi, r12
+    mov esi, r13d
+    call dispatch_is_nonzero_decimal_identifier
+    test al, al
+    jz .out
+    lea rdi, [report_log_channel]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    mov dword [report_log_len], 0
+    lea rdi, [chat_log_prefix]
+    mov esi, chat_log_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    cmp dword [author_name_len], 0
+    jg .author_name
+    cmp dword [author_id_len], 0
+    jg .author_id
+    lea rdi, [chat_log_unknown_user]
+    mov esi, chat_log_unknown_user_len
+    jmp .author_append
+.author_name:
+    lea rdi, [author_name]
+    mov esi, [author_name_len]
+    jmp .author_append
+.author_id:
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+.author_append:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [chat_log_channel_label]
+    mov esi, chat_log_channel_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [chat_log_question_label]
+    mov esi, chat_log_question_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    test rdi, rdi
+    jz .empty_question
+    test esi, esi
+    jle .empty_question
+    cmp esi, AUTOMOD_LOG_TEXT_CAP
+    jbe .question_cap_ready
+    mov esi, AUTOMOD_LOG_TEXT_CAP
+.question_cap_ready:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    jmp .answer_label
+.empty_question:
+    lea rdi, [chat_log_empty]
+    mov esi, chat_log_empty_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+.answer_label:
+    lea rdi, [chat_log_answer_label]
+    mov esi, chat_log_answer_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [ai_reply]
+    mov esi, [ai_reply_len]
+    test esi, esi
+    jle .out
+    cmp esi, AUTOMOD_LOG_TEXT_CAP
+    jbe .answer_cap_ready
+    mov esi, AUTOMOD_LOG_TEXT_CAP
+.answer_cap_ready:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [report_log_channel]
+    mov esi, r13d
+    lea rdx, [report_log]
+    mov ecx, [report_log_len]
+    call discord_send_text
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; Sends a bounded Automod audit line to the configured log channel only when the
 ; persisted channel ID is a valid nonzero decimal. Audit delivery cannot reverse
 ; a delete decision or prevent the user-facing Automod notice.
@@ -4405,6 +4536,18 @@ automod_log_message_label: db '||', 10, 'Pesan: ```'
 automod_log_message_label_len equ $ - automod_log_message_label
 automod_log_fence: db '```'
 automod_log_fence_len equ $ - automod_log_fence
+chat_log_prefix: db 'CHAT', 10, 'User: '
+chat_log_prefix_len equ $ - chat_log_prefix
+chat_log_unknown_user: db '(tidak diketahui)'
+chat_log_unknown_user_len equ $ - chat_log_unknown_user
+chat_log_channel_label: db 10, 'Channel: <#'
+chat_log_channel_label_len equ $ - chat_log_channel_label
+chat_log_question_label: db '>', 10, 'Pertanyaan: '
+chat_log_question_label_len equ $ - chat_log_question_label
+chat_log_empty: db '(kosong)'
+chat_log_empty_len equ $ - chat_log_empty
+chat_log_answer_label: db 10, 'Jawaban: '
+chat_log_answer_label_len equ $ - chat_log_answer_label
 report_usage_response: db 'Usage: report @user [reason].'
 report_usage_response_len equ $ - report_usage_response
 report_saved_response: db 'Report sent to the guild log channel.'
@@ -4688,6 +4831,7 @@ rank_scratch: resb 10
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP
+ai_reply_len: resd 1
 state_view_reply: resb STATE_VIEW_REPLY_CAP
 history_key_len: resd 1
 command_start: resd 1

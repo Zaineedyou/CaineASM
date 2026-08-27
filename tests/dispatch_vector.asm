@@ -1519,7 +1519,7 @@ _start:
     jnz .fail
     cmp qword [delete_calls], 2
     jne .fail
-    cmp qword [config_get_calls], 4
+    cmp qword [config_get_calls], 9
     jne .fail
     cmp qword [send_calls], 75
     jne .fail
@@ -1538,9 +1538,31 @@ _start:
     jnz .fail
     cmp qword [delete_calls], 3
     jne .fail
-    cmp qword [config_get_calls], 5
+    cmp qword [config_get_calls], 10
     jne .fail
     cmp qword [send_calls], 76
+    jne .fail
+
+    mov dword [failure_stage], 76
+    mov dword [automod_enabled], 0
+    mov dword [report_log_enabled], 1
+    mov dword [chat_followup_enabled], 1
+    lea rax, [ai_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], ai_response_len
+    lea rax, [chat_audit_prompt]
+    mov [expected_groq_ptr], rax
+    mov dword [expected_groq_len], chat_audit_prompt_len
+    lea rdi, [chat_audit_event]
+    mov esi, chat_audit_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [groq_calls], 4
+    jne .fail
+    cmp qword [config_get_calls], 11
+    jne .fail
+    cmp qword [send_calls], 78
     jne .fail
 
     mov dword [target_mode], TARGET_NONE
@@ -2622,13 +2644,24 @@ discord_send_text:
     jz .bad_text_bytes
     inc qword [send_calls]
     cmp dword [automod_followup_enabled], 0
-    je .report_followup
+    je .chat_followup
     mov dword [automod_followup_enabled], 0
     mov qword [expected_channel_ptr], 0
     mov dword [expected_channel_len], 0
     lea rax, [automod_response]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], automod_response_len
+    jmp .ok
+.chat_followup:
+    cmp dword [chat_followup_enabled], 0
+    je .report_followup
+    mov dword [chat_followup_enabled], 0
+    lea rax, [report_log_channel_value]
+    mov [expected_channel_ptr], rax
+    mov dword [expected_channel_len], report_log_channel_value_len
+    lea rax, [chat_audit_log]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], chat_audit_log_len
     jmp .ok
 .report_followup:
     cmp dword [report_followup_enabled], 0
@@ -2723,6 +2756,8 @@ groq_prompt: db 'brief this'
 groq_prompt_len equ $ - groq_prompt
 chat_prompt: db 'how are you'
 chat_prompt_len equ $ - chat_prompt
+chat_audit_prompt: db 'ping @here', 10, '`tag`'
+chat_audit_prompt_len equ $ - chat_audit_prompt
 ai_response: db 'AI summary'
 ai_response_len equ $ - ai_response
 unknown_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^kick","author":{"bot":false}}}'
@@ -2847,6 +2882,8 @@ report_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channe
 report_event_len equ $ - report_event
 chat_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^how are you","author":{"id":"112233445566778899","bot":false}}}'
 chat_event_len equ $ - chat_event
+chat_audit_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^ping @here', 0x5c, 'n`tag`","author":{"id":"112233445566778899","username":"Chat@all","bot":false}}}'
+chat_audit_event_len equ $ - chat_audit_event
 reply_to_bot_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"reply question","message_reference":{"message_id":"998877665544332211"},"author":{"id":"112233445566778899","bot":false}}}'
 reply_to_bot_event_len equ $ - reply_to_bot_event
 reply_prompt: db 'reply question'
@@ -2971,6 +3008,8 @@ automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
 automod_audit_log: db 'AUTOMOD', 10, 'User: Alice@', 0xe2, 0x80, 0x8b, 'everyone', 10, 'Channel: <#123456789012345678>', 10, 'Kata Terlarang: ||blocked||', 10, 'Pesan: ```blocked @', 0xe2, 0x80, 0x8b, 'here?', 39, 'code', 39, '```'
 automod_audit_log_len equ $ - automod_audit_log
+chat_audit_log: db 'CHAT', 10, 'User: Chat@', 0xe2, 0x80, 0x8b, 'all', 10, 'Channel: <#123456789012345678>', 10, 'Pertanyaan: ping @', 0xe2, 0x80, 0x8b, 'here?', 39, 'tag', 39, 10, 'Jawaban: AI summary'
+chat_audit_log_len equ $ - chat_audit_log
 blocked_word: db 'blocked'
 blocked_word_len equ $ - blocked_word
 automod_message_id: db '998877665544332211'
@@ -3029,6 +3068,7 @@ expected_channel_ptr: dq 0
 expected_channel_len: dd 0
 report_followup_enabled: dd 0
 automod_followup_enabled: dd 0
+chat_followup_enabled: dd 0
 report_log_enabled: dd 0
 delete_calls: dq 0
 clear_get_calls: dq 0
