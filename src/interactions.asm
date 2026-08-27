@@ -51,6 +51,7 @@ extern gateway_last_heartbeat_latency_ms
 %define DASHBOARD_UPTIME_CAP 64
 %define HELP_DYNAMIC_CAP 4096
 %define HELP_PREFIX_MAX 64
+%define INFO_DYNAMIC_CAP 1024
 
 section .text
 
@@ -918,9 +919,12 @@ interaction_handle_gateway:
     jmp .respond
 
 .info:
-    lea r8, [info_response]
-    mov r9d, info_response_len
-    jmp .respond
+    call interaction_build_info_response
+    test eax, eax
+    js .out
+    mov r9d, eax
+    lea r8, [info_dynamic]
+    jmp .component_respond_json
 .help:
     call interaction_build_help_response
     test eax, eax
@@ -988,6 +992,58 @@ interaction_handle_gateway:
     jmp .out
 .ignored:
     xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-4 Info embed with fixed source metadata and a bounded monotonic
+; uptime field. A time-format failure falls back to a constant, never emits a
+; partial response and never reads arbitrary memory.
+interaction_build_info_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [info_uptime_unknown]
+    mov r15d, info_uptime_unknown_len
+    lea rdi, [info_uptime]
+    mov esi, DASHBOARD_UPTIME_CAP
+    call gateway_uptime_format
+    test eax, eax
+    jle .build
+    cmp eax, DASHBOARD_UPTIME_CAP
+    ja .build
+    lea r12, [info_uptime]
+    mov r15d, eax
+.build:
+    mov eax, info_response_prefix_len
+    add eax, r15d
+    add eax, info_response_suffix_len
+    cmp eax, INFO_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [info_dynamic]
+    lea rsi, [info_response_prefix]
+    mov edx, info_response_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [info_dynamic + info_response_prefix_len]
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    add rdi, r15
+    lea rsi, [info_response_suffix]
+    mov edx, info_response_suffix_len
+    call interaction_copy_bytes
+    mov byte [info_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
 .out:
     pop r15
     pop r14
@@ -3516,8 +3572,12 @@ dashboard_status_suffix: db ' messages"}]}],"components":[{"type":1,"components"
 dashboard_status_suffix_len equ $ - dashboard_status_suffix
 health_probe_ping: db 'ping'
 health_probe_ping_len equ $ - health_probe_ping
-info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
-info_response_len equ $ - info_response
+info_uptime_unknown: db 'Tidak tersedia'
+info_uptime_unknown_len equ $ - info_uptime_unknown
+info_response_prefix: db '{"type":4,"data":{"embeds":[{"color":16738740,"title":"Caine - AI Discord Bot","description":"Halo! Aku Caine, AI asisten yang siap bantu kamu di server ini.","fields":[{"name":"Developer","value":"Zaineedyou","inline":true},{"name":"Infrastructure","value":"Zaineedyou","inline":true},{"name":"Default Model","value":"Llama 3.3 70B","inline":true},{"name":"Vision Model","value":"Llama 4 Scout 17B","inline":true},{"name":"Versi","value":"v1.0.0","inline":true},{"name":"Uptime","value":"'
+info_response_prefix_len equ $ - info_response_prefix
+info_response_suffix: db '","inline":true},{"name":"Status","value":"Online","inline":true}],"footer":{"text":"Property Of Caineedyou | Developed by Zaineedyou"}}]}}'
+info_response_suffix_len equ $ - info_response_suffix
 help_default_prefix: db 'Caine'
 help_default_prefix_len equ $ - help_default_prefix
 help_response_prefix: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Help - Caine Bot","fields":[{"name":"AI Chat","value":"`Caine <pertanyaan>` atau mention\nKirim gambar + teks untuk analisis visual\n`Caine reset` - hapus memory"},{"name":"Moderation","value":"`Caine kick/ban/unban @user`\n`Caine warn/warnings/clearwarn @user`\n`Caine timeout @user <menit>`\n`Caine clear <jumlah>`\n`Caine lock/unlock/slowmode`"},{"name":"Leveling & AFK","value":"`Caine rank [@user]`\n`Caine leaderboard`\n`Caine afk [alasan]`\n`Caine afklist`"},{"name":"Admin","value":"`Caine setlog #channel`\n`Caine setwelcome/setgoodbye #channel`\n`Caine autorole @role`\n`Caine addword/removeword <kata>`\n`Caine setpersona <prompt>`\n`Caine setmodel <alias>`"},{"name":"Model Tersedia","value":"`llama70b` `gpt120b` `gpt20b` `qwen32b`"},{"name":"Slash Commands","value":"`/info` `/dashboard` `/help`"}],"footer":{"text":"Prefix: '
@@ -3640,3 +3700,5 @@ dashboard_status_uptime: resb DASHBOARD_UPTIME_CAP
 dashboard_status_server_count: resb 20
 interaction_uint_scratch: resb 21
 help_dynamic: resb HELP_DYNAMIC_CAP
+info_dynamic: resb INFO_DYNAMIC_CAP
+info_uptime: resb DASHBOARD_UPTIME_CAP
