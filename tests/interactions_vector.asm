@@ -7,6 +7,7 @@ global discord_interaction_respond_text
 global discord_interaction_respond_json
 global bot_owner_ptr
 global bot_owner_len
+global guild_config_set
 
 %define SYS_EXIT 60
 
@@ -73,7 +74,33 @@ _start:
     cmp qword [json_callback_calls], 3
     jne .fail
 
+    mov dword [failure_stage], 6
+    lea rax, [modal_setlog_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], modal_setlog_response_len
+    lea rdi, [dashboard_setlog_frame]
+    mov esi, dashboard_setlog_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 4
+    jne .fail
+
     mov dword [failure_stage], 7
+    lea rax, [setlog_saved_response]
+    mov [expected_content_ptr], rax
+    mov dword [expected_content_len], setlog_saved_response_len
+    lea rdi, [modal_setlog_submit_frame]
+    mov esi, modal_setlog_submit_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [config_set_calls], 1
+    jne .fail
+    cmp qword [callback_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 9
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], manager_denied_response_len
@@ -82,36 +109,36 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 3
+    cmp qword [callback_calls], 4
     jne .fail
-    cmp qword [json_callback_calls], 3
+    cmp qword [json_callback_calls], 4
     jne .fail
 
-    mov dword [failure_stage], 8
+    mov dword [failure_stage], 10
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 3
+    cmp qword [callback_calls], 4
     jne .fail
 
-    mov dword [failure_stage], 9
+    mov dword [failure_stage], 11
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 3
+    cmp qword [callback_calls], 4
     jne .fail
 
-    mov dword [failure_stage], 10
+    mov dword [failure_stage], 12
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 3
+    cmp qword [callback_calls], 4
     jne .fail
 
     mov eax, SYS_EXIT
@@ -167,6 +194,51 @@ discord_interaction_respond_text:
     mov eax, -1
 .out:
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild, ESI=guild len, RDX=setting, ECX=setting len, R8=value, R9D=len.
+guild_config_set:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov rbx, rdx
+    mov r12, r8
+    mov r13d, r9d
+    mov r14d, ecx
+    cmp esi, modal_guild_id_len
+    jne .bad
+    lea rsi, [modal_guild_id]
+    mov edx, modal_guild_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r14d, setting_log_channel_len
+    jne .bad
+    mov rdi, rbx
+    lea rsi, [setting_log_channel]
+    mov edx, setting_log_channel_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r13d, modal_channel_id_len
+    jne .bad
+    mov rdi, r12
+    lea rsi, [modal_channel_id]
+    mov edx, modal_channel_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [config_set_calls]
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
     pop r14
     pop r13
     pop r12
@@ -240,6 +312,10 @@ dashboard_back_frame: db '{"op":0,"s":5,"t":"INTERACTION_CREATE","d":{"id":"1122
 dashboard_back_frame_len equ $ - dashboard_back_frame
 dashboard_general_frame: db '{"op":0,"s":6,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_general","component_type":2}}}'
 dashboard_general_frame_len equ $ - dashboard_general_frame
+dashboard_setlog_frame: db '{"op":0,"s":7,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_setlog","component_type":2}}}'
+dashboard_setlog_frame_len equ $ - dashboard_setlog_frame
+modal_setlog_submit_frame: db '{"op":0,"s":8,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":5,"guild_id":"123456789012345678","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"modal_setlog","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","value":"987654321098765432"}]}]}}}'
+modal_setlog_submit_frame_len equ $ - modal_setlog_submit_frame
 unknown_frame_len equ $ - unknown_frame
 wrong_type_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":4,"data":{"id":"4","name":"info","type":1}}}'
 wrong_type_frame_len equ $ - wrong_type_frame
@@ -257,10 +333,21 @@ dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":579
 dashboard_back_response_len equ $ - dashboard_back_response
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
+modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
+modal_setlog_response_len equ $ - modal_setlog_response
+setlog_saved_response: db 'Log channel diset.'
+setlog_saved_response_len equ $ - setlog_saved_response
+modal_guild_id: db '123456789012345678'
+modal_guild_id_len equ $ - modal_guild_id
+modal_channel_id: db '987654321098765432'
+modal_channel_id_len equ $ - modal_channel_id
+setting_log_channel: db 'log_channel'
+setting_log_channel_len equ $ - setting_log_channel
 
 section .data
 callback_calls: dq 0
 json_callback_calls: dq 0
+config_set_calls: dq 0
 bot_owner_ptr: dq 0
 bot_owner_len: dd 0
 expected_json_ptr: dq 0

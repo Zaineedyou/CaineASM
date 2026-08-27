@@ -10,6 +10,7 @@ extern discord_interaction_respond_text
 extern discord_interaction_respond_json
 extern bot_owner_ptr
 extern bot_owner_len
+extern guild_config_set
 
 %define FRAME_ID_CAP 64
 %define TOKEN_CAP 192
@@ -79,6 +80,8 @@ interaction_handle_gateway:
     cmp eax, 2
     je .credentials
     cmp eax, 3
+    je .credentials
+    cmp eax, 5
     jne .ignored
 .credentials:
     ; Interaction ID and token occur at the interaction payload object level.
@@ -119,6 +122,8 @@ interaction_handle_gateway:
     mov byte [interaction_token + rax], 0
     cmp dword [interaction_type], 3
     je .component
+    cmp dword [interaction_type], 5
+    je .modal
 
     mov rdi, rbx
     mov rsi, r14
@@ -224,7 +229,18 @@ interaction_handle_gateway:
     mov ecx, component_general_len
     call equal_literal
     test al, al
+    jnz .component_general
+    lea rdi, [interaction_component_id]
+    mov esi, [interaction_component_id_len]
+    lea rdx, [component_setlog]
+    mov ecx, component_setlog_len
+    call equal_literal
+    test al, al
     jz .ignored
+    lea r8, [modal_setlog_response]
+    mov r9d, modal_setlog_response_len
+    jmp .component_respond_json
+.component_general:
     lea r8, [dashboard_general_response]
     mov r9d, dashboard_general_response_len
     jmp .component_respond_json
@@ -243,6 +259,110 @@ interaction_handle_gateway:
     mov ecx, [interaction_token_len]
     call discord_interaction_respond_json
     jmp .out
+
+.modal:
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    call interaction_is_manager
+    test al, al
+    jz .component_denied
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    sub rsi, rbx
+    lea rdx, [key_guild_id]
+    mov ecx, key_guild_id_len
+    call json_find_key
+    test rax, rax
+    jz .modal_failure
+    mov rdi, rax
+    mov rsi, [interaction_payload_end]
+    lea rdx, [interaction_guild_id]
+    mov ecx, FRAME_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .modal_failure
+    mov [interaction_guild_id_len], eax
+    lea rdi, [interaction_guild_id]
+    mov esi, eax
+    call decimal_id_valid
+    test al, al
+    jz .modal_failure
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    sub rsi, rbx
+    lea rdx, [key_command_data]
+    mov ecx, key_command_data_len
+    call json_find_key
+    test rax, rax
+    jz .modal_failure
+    mov r15, rax
+    mov rdi, r15
+    mov rsi, [interaction_payload_end]
+    call json_object_end
+    test rax, rax
+    jz .modal_failure
+    mov r14, rax
+    mov rdi, r15
+    mov rsi, r14
+    sub rsi, r15
+    lea rdx, [key_custom_id]
+    mov ecx, key_custom_id_len
+    call json_find_key
+    test rax, rax
+    jz .modal_failure
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [interaction_component_id]
+    mov ecx, NAME_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .modal_failure
+    mov [interaction_component_id_len], eax
+    lea rdi, [interaction_component_id]
+    mov esi, eax
+    lea rdx, [modal_setlog_id]
+    mov ecx, modal_setlog_id_len
+    call equal_literal
+    test al, al
+    jz .ignored
+    ; A modal submit has one bounded text-input value for this screen.
+    mov rdi, r15
+    mov rsi, r14
+    sub rsi, r15
+    lea rdx, [key_value]
+    mov ecx, key_value_len
+    call json_find_key
+    test rax, rax
+    jz .modal_failure
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [interaction_modal_value]
+    mov ecx, FRAME_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .modal_failure
+    mov [interaction_modal_value_len], eax
+    lea rdi, [interaction_modal_value]
+    mov esi, eax
+    call decimal_id_valid
+    test al, al
+    jz .modal_failure
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    lea r8, [interaction_modal_value]
+    mov r9d, [interaction_modal_value_len]
+    call guild_config_set
+    test eax, eax
+    js .modal_failure
+    lea r8, [setlog_saved_response]
+    mov r9d, setlog_saved_response_len
+    jmp .respond
+.modal_failure:
+    lea r8, [setlog_failed_response]
+    mov r9d, setlog_failed_response_len
+    jmp .respond
 
 .info:
     lea r8, [info_response]
@@ -424,6 +544,42 @@ interaction_is_manager:
     pop rbx
     ret
 
+; RDI=decimal identifier, ESI=len. AL=1 only for a complete nonzero bounded
+; decimal snowflake-like identifier.
+decimal_id_valid:
+    test rdi, rdi
+    jz .no
+    cmp esi, 1
+    jb .no
+    cmp esi, FRAME_ID_CAP - 1
+    ja .no
+    xor ecx, ecx
+    xor edx, edx
+.loop:
+    cmp ecx, esi
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    ja .no
+    cmp al, '0'
+    jne .nonzero
+    inc ecx
+    jmp .loop
+.nonzero:
+    mov edx, 1
+    inc ecx
+    jmp .loop
+.yes:
+    test edx, edx
+    jz .no
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 ; RDI=decimal bytes, ESI=len. RAX=value, RDX=0 success; RDX=1 invalid/overflow.
 parse_decimal_u64:
     test esi, esi
@@ -503,6 +659,10 @@ key_member: db 'member'
 key_member_len equ $ - key_member
 key_user: db 'user'
 key_user_len equ $ - key_user
+key_guild_id: db 'guild_id'
+key_guild_id_len equ $ - key_guild_id
+key_value: db 'value'
+key_value_len equ $ - key_value
 key_custom_id: db 'custom_id'
 key_custom_id_len equ $ - key_custom_id
 key_permissions: db 'permissions'
@@ -523,6 +683,12 @@ component_back: db 'dash_back'
 component_back_len equ $ - component_back
 component_general: db 'dash_general'
 component_general_len equ $ - component_general
+component_setlog: db 'dash_setlog'
+component_setlog_len equ $ - component_setlog
+modal_setlog_id: db 'modal_setlog'
+modal_setlog_id_len equ $ - modal_setlog_id
+setting_log_channel: db 'log_channel'
+setting_log_channel_len equ $ - setting_log_channel
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
 help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
@@ -535,6 +701,12 @@ dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":579
 dashboard_back_response_len equ $ - dashboard_back_response
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
+modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
+modal_setlog_response_len equ $ - modal_setlog_response
+setlog_saved_response: db 'Log channel diset.'
+setlog_saved_response_len equ $ - setlog_saved_response
+setlog_failed_response: db 'Log channel tidak dapat disimpan.'
+setlog_failed_response_len equ $ - setlog_failed_response
 
 section .bss
 interaction_id: resb FRAME_ID_CAP
@@ -550,3 +722,7 @@ interaction_permissions: resb 32
 interaction_type: resd 1
 interaction_component_id: resb NAME_CAP
 interaction_component_id_len: resd 1
+interaction_guild_id: resb FRAME_ID_CAP
+interaction_guild_id_len: resd 1
+interaction_modal_value: resb FRAME_ID_CAP
+interaction_modal_value_len: resd 1
