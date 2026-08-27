@@ -20,6 +20,8 @@ global guild_channel_list
 global gateway_guild_name_get
 global gateway_uptime_format
 global gateway_guild_count
+global bot_prefix_ptr
+global bot_prefix_len
 global groq_select_guild
 global groq_select_history
 global groq_chat_once
@@ -33,6 +35,9 @@ global gateway_last_heartbeat_latency_ms
 section .text
 _start:
     mov qword [callback_calls], 0
+    lea rax, [help_runtime_prefix]
+    mov [bot_prefix_ptr], rax
+    mov dword [bot_prefix_len], help_runtime_prefix_len
     mov dword [failure_stage], 1
     lea rax, [info_response]
     mov [expected_content_ptr], rax
@@ -46,15 +51,17 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 2
-    lea rax, [help_response]
-    mov [expected_content_ptr], rax
-    mov dword [expected_content_len], help_response_len
+    lea rax, [help_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], help_dynamic_response_len
     lea rdi, [help_frame]
     mov esi, help_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 2
+    cmp qword [callback_calls], 1
+    jne .fail
+    cmp qword [json_callback_calls], 1
     jne .fail
 
     mov dword [failure_stage], 3
@@ -67,7 +74,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 1
+    cmp qword [json_callback_calls], 2
     jne .fail
 
     mov dword [failure_stage], 4
@@ -79,7 +86,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 2
+    cmp qword [json_callback_calls], 3
     jne .fail
     mov byte [dashboard_guild_mode], 0
 
@@ -94,7 +101,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 3
+    cmp qword [json_callback_calls], 4
     jne .fail
     mov byte [general_log_mode], 0
     mov byte [general_disabled_mode], 0
@@ -109,7 +116,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 4
+    cmp qword [json_callback_calls], 5
     jne .fail
 
     mov dword [failure_stage], 7
@@ -122,7 +129,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 5
+    cmp qword [json_callback_calls], 6
     jne .fail
     mov byte [welcome_dashboard_mode], 0
 
@@ -136,7 +143,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 6
+    cmp qword [json_callback_calls], 7
     jne .fail
 
     mov dword [failure_stage], 9
@@ -148,9 +155,19 @@ _start:
     mov esi, dashboard_autorole_frame_len
     call interaction_handle_gateway
     test eax, eax
-    jnz .fail
-    cmp qword [json_callback_calls], 7
-    jne .fail
+    jz .autorole_handler_ok
+    mov dword [failure_stage], 92
+    jmp .fail
+.autorole_handler_ok:
+    cmp qword [json_callback_calls], 8
+    je .autorole_counter_ok
+    jb .autorole_counter_low
+    mov dword [failure_stage], 91
+    jmp .fail
+.autorole_counter_low:
+    mov dword [failure_stage], 90
+    jmp .fail
+.autorole_counter_ok:
     mov byte [autorole_dashboard_mode], 0
 
     mov dword [failure_stage], 10
@@ -163,7 +180,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 8
+    cmp qword [json_callback_calls], 9
     jne .fail
 
     mov dword [failure_stage], 11
@@ -176,7 +193,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 9
+    cmp qword [json_callback_calls], 10
     jne .fail
     mov byte [leveling_dashboard_mode], 0
 
@@ -189,7 +206,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 10
+    cmp qword [json_callback_calls], 11
     jne .fail
 
     mov dword [failure_stage], 13
@@ -202,7 +219,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 11
+    cmp qword [json_callback_calls], 12
     jne .fail
 
     mov dword [failure_stage], 14
@@ -215,7 +232,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 12
+    cmp qword [json_callback_calls], 13
     jne .fail
     mov byte [model_dashboard_mode], 0
 
@@ -229,7 +246,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 13
+    cmp qword [json_callback_calls], 14
     jne .fail
 
     mov dword [failure_stage], 16
@@ -242,7 +259,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 14
+    cmp qword [json_callback_calls], 15
     jne .fail
 
     mov dword [failure_stage], 17
@@ -255,7 +272,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 15
+    cmp qword [json_callback_calls], 16
     jne .fail
     mov byte [persona_dashboard_mode], 0
 
@@ -269,7 +286,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 16
+    cmp qword [json_callback_calls], 17
     jne .fail
 
     mov dword [failure_stage], 19
@@ -282,7 +299,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 17
+    cmp qword [json_callback_calls], 18
     jne .fail
     mov byte [moderation_dashboard_mode], 0
 
@@ -296,7 +313,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 18
+    cmp qword [json_callback_calls], 19
     jne .fail
 
     mov dword [failure_stage], 21
@@ -309,7 +326,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 19
+    cmp qword [json_callback_calls], 20
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -333,7 +350,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 1
     jne .fail
-    cmp qword [callback_calls], 3
+    cmp qword [callback_calls], 2
     jne .fail
 
     mov dword [failure_stage], 9
@@ -350,7 +367,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 2
     jne .fail
-    cmp qword [callback_calls], 4
+    cmp qword [callback_calls], 3
     jne .fail
 
     mov dword [failure_stage], 10
@@ -367,7 +384,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 3
     jne .fail
-    cmp qword [callback_calls], 5
+    cmp qword [callback_calls], 4
     jne .fail
 
     mov dword [failure_stage], 11
@@ -384,7 +401,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 4
     jne .fail
-    cmp qword [callback_calls], 6
+    cmp qword [callback_calls], 5
     jne .fail
 
     mov dword [failure_stage], 12
@@ -396,7 +413,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 20
+    cmp qword [json_callback_calls], 21
     jne .fail
 
     mov dword [failure_stage], 22
@@ -419,7 +436,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 5
     jne .fail
-    cmp qword [callback_calls], 7
+    cmp qword [callback_calls], 6
     jne .fail
 
     mov dword [failure_stage], 14
@@ -442,7 +459,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 6
     jne .fail
-    cmp qword [callback_calls], 8
+    cmp qword [callback_calls], 7
     jne .fail
 
     mov dword [failure_stage], 15
@@ -462,7 +479,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 7
     jne .fail
-    cmp qword [callback_calls], 9
+    cmp qword [callback_calls], 8
     jne .fail
 
     mov dword [failure_stage], 16
@@ -482,7 +499,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 8
     jne .fail
-    cmp qword [callback_calls], 10
+    cmp qword [callback_calls], 9
     jne .fail
 
     mov dword [failure_stage], 17
@@ -502,7 +519,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 9
     jne .fail
-    cmp qword [callback_calls], 11
+    cmp qword [callback_calls], 10
     jne .fail
 
     mov dword [failure_stage], 18
@@ -522,7 +539,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 10
     jne .fail
-    cmp qword [callback_calls], 12
+    cmp qword [callback_calls], 11
     jne .fail
 
     mov dword [failure_stage], 19
@@ -542,7 +559,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 11
     jne .fail
-    cmp qword [callback_calls], 13
+    cmp qword [callback_calls], 12
     jne .fail
 
     mov dword [failure_stage], 20
@@ -562,7 +579,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 12
     jne .fail
-    cmp qword [callback_calls], 14
+    cmp qword [callback_calls], 13
     jne .fail
 
     mov dword [failure_stage], 21
@@ -579,7 +596,7 @@ _start:
     jnz .fail
     cmp qword [config_delete_calls], 1
     jne .fail
-    cmp qword [callback_calls], 15
+    cmp qword [callback_calls], 14
     jne .fail
 
     mov dword [failure_stage], 22
@@ -596,7 +613,7 @@ _start:
     jnz .fail
     cmp qword [word_add_calls], 1
     jne .fail
-    cmp qword [callback_calls], 16
+    cmp qword [callback_calls], 15
     jne .fail
 
     mov dword [failure_stage], 23
@@ -610,7 +627,7 @@ _start:
     jnz .fail
     cmp qword [word_remove_calls], 1
     jne .fail
-    cmp qword [callback_calls], 17
+    cmp qword [callback_calls], 16
     jne .fail
 
     mov dword [failure_stage], 24
@@ -631,7 +648,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 13
     jne .fail
-    cmp qword [callback_calls], 18
+    cmp qword [callback_calls], 17
     jne .fail
 
     mov dword [failure_stage], 25
@@ -646,7 +663,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 13
     jne .fail
-    cmp qword [callback_calls], 19
+    cmp qword [callback_calls], 18
     jne .fail
 
     mov dword [failure_stage], 26
@@ -673,7 +690,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 21
+    cmp qword [json_callback_calls], 22
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -703,7 +720,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 22
+    cmp qword [json_callback_calls], 23
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -719,7 +736,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 23
+    cmp qword [json_callback_calls], 24
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -732,7 +749,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 24
+    cmp qword [json_callback_calls], 25
     jne .fail
 
     mov dword [failure_stage], 29
@@ -750,7 +767,7 @@ _start:
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
-    cmp qword [callback_calls], 20
+    cmp qword [callback_calls], 19
     jne .fail
 
     mov dword [failure_stage], 29
@@ -762,9 +779,9 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 21
+    cmp qword [callback_calls], 20
     jne .fail
-    cmp qword [json_callback_calls], 24
+    cmp qword [json_callback_calls], 25
     jne .fail
 
     mov dword [failure_stage], 31
@@ -778,7 +795,7 @@ _start:
     jnz .fail
     cmp qword [config_set_calls], 15
     jne .fail
-    cmp qword [callback_calls], 22
+    cmp qword [callback_calls], 21
     jne .fail
 
     mov dword [failure_stage], 32
@@ -787,7 +804,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 22
+    cmp qword [callback_calls], 21
     jne .fail
 
     mov dword [failure_stage], 33
@@ -796,7 +813,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 22
+    cmp qword [callback_calls], 21
     jne .fail
 
     mov dword [failure_stage], 34
@@ -805,7 +822,22 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 22
+    cmp qword [callback_calls], 21
+    jne .fail
+
+    mov dword [failure_stage], 35
+    lea rax, [help_invalid_prefix]
+    mov [bot_prefix_ptr], rax
+    mov dword [bot_prefix_len], help_invalid_prefix_len
+    lea rax, [help_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], help_fallback_response_len
+    lea rdi, [help_frame]
+    mov esi, help_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 26
     jne .fail
 
     mov eax, SYS_EXIT
@@ -1497,8 +1529,14 @@ malformed_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445
 malformed_frame_len equ $ - malformed_frame
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
-help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
-help_response_len equ $ - help_response
+help_runtime_prefix: db 'C', '"', 0x5c
+help_runtime_prefix_len equ $ - help_runtime_prefix
+help_invalid_prefix: db 'x', 10
+help_invalid_prefix_len equ $ - help_invalid_prefix
+help_dynamic_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Help - Caine Bot","fields":[{"name":"AI Chat","value":"`Caine <pertanyaan>` atau mention', 0x5c, 'nKirim gambar + teks untuk analisis visual', 0x5c, 'n`Caine reset` - hapus memory"},{"name":"Moderation","value":"`Caine kick/ban/unban @user`', 0x5c, 'n`Caine warn/warnings/clearwarn @user`', 0x5c, 'n`Caine timeout @user <menit>`', 0x5c, 'n`Caine clear <jumlah>`', 0x5c, 'n`Caine lock/unlock/slowmode`"},{"name":"Leveling & AFK","value":"`Caine rank [@user]`', 0x5c, 'n`Caine leaderboard`', 0x5c, 'n`Caine afk [alasan]`', 0x5c, 'n`Caine afklist`"},{"name":"Admin","value":"`Caine setlog #channel`', 0x5c, 'n`Caine setwelcome/setgoodbye #channel`', 0x5c, 'n`Caine autorole @role`', 0x5c, 'n`Caine addword/removeword <kata>`', 0x5c, 'n`Caine setpersona <prompt>`', 0x5c, 'n`Caine setmodel <alias>`"},{"name":"Model Tersedia","value":"`llama70b` `gpt120b` `gpt20b` `qwen32b`"},{"name":"Slash Commands","value":"`/info` `/dashboard` `/help`"}],"footer":{"text":"Prefix: C', 0x5c, '"', 0x5c, 0x5c, ' | Bisa juga di-mention atau reply"}}]}}'
+help_dynamic_response_len equ $ - help_dynamic_response
+help_fallback_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Help - Caine Bot","fields":[{"name":"AI Chat","value":"`Caine <pertanyaan>` atau mention', 0x5c, 'nKirim gambar + teks untuk analisis visual', 0x5c, 'n`Caine reset` - hapus memory"},{"name":"Moderation","value":"`Caine kick/ban/unban @user`', 0x5c, 'n`Caine warn/warnings/clearwarn @user`', 0x5c, 'n`Caine timeout @user <menit>`', 0x5c, 'n`Caine clear <jumlah>`', 0x5c, 'n`Caine lock/unlock/slowmode`"},{"name":"Leveling & AFK","value":"`Caine rank [@user]`', 0x5c, 'n`Caine leaderboard`', 0x5c, 'n`Caine afk [alasan]`', 0x5c, 'n`Caine afklist`"},{"name":"Admin","value":"`Caine setlog #channel`', 0x5c, 'n`Caine setwelcome/setgoodbye #channel`', 0x5c, 'n`Caine autorole @role`', 0x5c, 'n`Caine addword/removeword <kata>`', 0x5c, 'n`Caine setpersona <prompt>`', 0x5c, 'n`Caine setmodel <alias>`"},{"name":"Model Tersedia","value":"`llama70b` `gpt120b` `gpt20b` `qwen32b`"},{"name":"Slash Commands","value":"`/info` `/dashboard` `/help`"}],"footer":{"text":"Prefix: Caine | Bisa juga di-mention atau reply"}}]}}'
+help_fallback_response_len equ $ - help_fallback_response
 manager_denied_response: db 'Khusus admin atau bot owner.'
 manager_denied_response_len equ $ - manager_denied_response
 dashboard_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **Caine ', 0x5c, '"Guild', 0x5c, 'nUtama**', 0x5c, 'nPilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
@@ -1715,4 +1753,6 @@ expected_delete_setting_ptr: dq 0
 expected_delete_setting_len: dd 0
 expected_health_edit_ptr: dq 0
 expected_health_edit_len: dd 0
+bot_prefix_ptr: dq 0
+bot_prefix_len: dd 0
 failure_stage: dd 0

@@ -25,6 +25,8 @@ extern guild_channel_list
 extern gateway_guild_name_get
 extern gateway_uptime_format
 extern gateway_guild_count
+extern bot_prefix_ptr
+extern bot_prefix_len
 extern groq_select_guild
 extern groq_select_history
 extern groq_chat_once
@@ -47,6 +49,8 @@ extern gateway_last_heartbeat_latency_ms
 %define DASHBOARD_WORDS_CAP 512
 %define DASHBOARD_TEXT_RENDER_CAP 240
 %define DASHBOARD_UPTIME_CAP 64
+%define HELP_DYNAMIC_CAP 4096
+%define HELP_PREFIX_MAX 64
 
 section .text
 
@@ -918,9 +922,12 @@ interaction_handle_gateway:
     mov r9d, info_response_len
     jmp .respond
 .help:
-    lea r8, [help_response]
-    mov r9d, help_response_len
-    jmp .respond
+    call interaction_build_help_response
+    test eax, eax
+    js .out
+    mov r9d, eax
+    lea r8, [help_dynamic]
+    jmp .component_respond_json
 .healthcheck:
     mov rdi, rbx
     mov rsi, [interaction_payload_end]
@@ -987,6 +994,96 @@ interaction_handle_gateway:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; Builds a type-4 ephemeral Help embed. BOT_PREFIX may be set only from the
+; environment, but is still length/control validated and JSON-escaped before
+; inclusion; any malformed or absent prefix uses the safe Caine fallback.
+interaction_build_help_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [help_default_prefix]
+    mov r15d, help_default_prefix_len
+    mov r13, [bot_prefix_ptr]
+    mov r14d, [bot_prefix_len]
+    test r13, r13
+    jz .build
+    test r14d, r14d
+    jle .build
+    cmp r14d, HELP_PREFIX_MAX
+    ja .build
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_help_prefix_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, r15d
+    imul eax, eax, 6
+    add eax, help_response_prefix_len
+    add eax, help_response_suffix_len
+    cmp eax, HELP_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, help_response_prefix_len
+    lea rdi, [help_dynamic]
+    lea rsi, [help_response_prefix]
+    mov edx, help_response_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [help_dynamic + rbx]
+    mov esi, HELP_DYNAMIC_CAP - 1
+    sub esi, ebx
+    sub esi, help_response_suffix_len
+    mov rdx, r12
+    mov ecx, r15d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+    lea rdi, [help_dynamic + rbx]
+    lea rsi, [help_response_suffix]
+    mov edx, help_response_suffix_len
+    call interaction_copy_bytes
+    add ebx, help_response_suffix_len
+    mov byte [help_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=prefix, ESI=len. AL=1 only for printable bytes so help JSON can escape
+; quote/backslash but never admits control characters or oversized input.
+interaction_help_prefix_valid:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, HELP_PREFIX_MAX
+    ja .no
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .yes
+    cmp byte [rdi + rcx], 0x20
+    jb .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; EDI=interaction response type 4 (initial) or 7 (component update). Builds
@@ -3421,8 +3518,12 @@ health_probe_ping: db 'ping'
 health_probe_ping_len equ $ - health_probe_ping
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
-help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
-help_response_len equ $ - help_response
+help_default_prefix: db 'Caine'
+help_default_prefix_len equ $ - help_default_prefix
+help_response_prefix: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Help - Caine Bot","fields":[{"name":"AI Chat","value":"`Caine <pertanyaan>` atau mention\nKirim gambar + teks untuk analisis visual\n`Caine reset` - hapus memory"},{"name":"Moderation","value":"`Caine kick/ban/unban @user`\n`Caine warn/warnings/clearwarn @user`\n`Caine timeout @user <menit>`\n`Caine clear <jumlah>`\n`Caine lock/unlock/slowmode`"},{"name":"Leveling & AFK","value":"`Caine rank [@user]`\n`Caine leaderboard`\n`Caine afk [alasan]`\n`Caine afklist`"},{"name":"Admin","value":"`Caine setlog #channel`\n`Caine setwelcome/setgoodbye #channel`\n`Caine autorole @role`\n`Caine addword/removeword <kata>`\n`Caine setpersona <prompt>`\n`Caine setmodel <alias>`"},{"name":"Model Tersedia","value":"`llama70b` `gpt120b` `gpt20b` `qwen32b`"},{"name":"Slash Commands","value":"`/info` `/dashboard` `/help`"}],"footer":{"text":"Prefix: '
+help_response_prefix_len equ $ - help_response_prefix
+help_response_suffix: db ' | Bisa juga di-mention atau reply"}}]}}'
+help_response_suffix_len equ $ - help_response_suffix
 manager_denied_response: db 'Khusus admin atau bot owner.'
 manager_denied_response_len equ $ - manager_denied_response
 dashboard_guild_unknown: db 'Tidak diketahui'
@@ -3538,3 +3639,4 @@ dashboard_main_dynamic: resb DASHBOARD_MAIN_DYNAMIC_CAP
 dashboard_status_uptime: resb DASHBOARD_UPTIME_CAP
 dashboard_status_server_count: resb 20
 interaction_uint_scratch: resb 21
+help_dynamic: resb HELP_DYNAMIC_CAP
