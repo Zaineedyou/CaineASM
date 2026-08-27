@@ -268,19 +268,6 @@ dispatch_message_create:
     call message_rate_allow
     test al, al
     jz .handled
-    cmp dword [guild_id_len], 0
-    je .content
-    lea rdi, [guild_id]
-    mov esi, [guild_id_len]
-    lea rdx, [author_id]
-    mov ecx, [author_id_len]
-    call xp_increment
-    lea rdi, [guild_id]
-    mov esi, [guild_id_len]
-    lea rdx, [author_id]
-    mov ecx, [author_id_len]
-    call afk_clear
-
 .content:
     mov rdi, r12
     mov rsi, r13
@@ -337,6 +324,21 @@ dispatch_message_create:
     mov esi, automod_response_len
     jmp .reply
 .automod_done:
+    ; Source runs XP and AFK bookkeeping only after a message has passed
+    ; Automod, but still before a disabled channel suppresses routing.
+    cmp dword [guild_id_len], 0
+    je .state_done
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call xp_increment
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [author_id]
+    mov ecx, [author_id_len]
+    call afk_clear
+.state_done:
 
     ; Disabled channels still reach prior message-state bookkeeping, but no
     ; command/AI routing is allowed, matching the source event order.
@@ -1605,6 +1607,9 @@ dispatch_message_create:
 
 
 .clear:
+    call dispatch_tail_after_command
+    test esi, esi
+    jle .reset
     mov r8, PERMISSION_MANAGE_MESSAGES
     call dispatch_has_permission
     test al, al
@@ -1613,7 +1618,6 @@ dispatch_message_create:
     call dispatch_bot_has_permission
     test al, al
     jz .bot_denied
-    call dispatch_tail_after_command
     mov rdi, [dispatch_tail_ptr]
     mov esi, [dispatch_tail_len]
     call dispatch_parse_clear_limit

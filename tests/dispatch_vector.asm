@@ -1619,6 +1619,20 @@ _start:
     jne .fail
     mov byte [message_rate_allowed], 1
 
+    mov dword [failure_stage], 80
+    lea rax, [reset_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], reset_response_len
+    lea rdi, [clear_reset_event]
+    mov esi, clear_reset_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [history_clear_calls], 3
+    jne .fail
+    cmp qword [send_calls], 82
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -2824,6 +2838,8 @@ reset_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel
 reset_event_len equ $ - reset_event
 rate_limited_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^help","author":{"id":"rate-user","bot":false}}}'
 rate_limited_event_len equ $ - rate_limited_event
+clear_reset_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^clear","author":{"id":"clear-user","bot":false}}}'
+clear_reset_event_len equ $ - clear_reset_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^rank","author":{"id":"user-2","bot":false}}}'
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
