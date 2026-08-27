@@ -22,6 +22,7 @@ extern guild_auth_roles_have
 extern guild_config_get
 extern state_format_banned_words
 extern guild_channel_list
+extern gateway_guild_name_get
 extern groq_select_guild
 extern groq_select_history
 extern groq_chat_once
@@ -40,6 +41,7 @@ extern gateway_last_heartbeat_latency_ms
 %define DASHBOARD_WELCOME_DYNAMIC_CAP 4096
 %define DASHBOARD_PERSONA_DYNAMIC_CAP 4096
 %define DASHBOARD_MODERATION_DYNAMIC_CAP 4096
+%define DASHBOARD_MAIN_DYNAMIC_CAP 4096
 %define DASHBOARD_WORDS_CAP 512
 %define DASHBOARD_TEXT_RENDER_CAP 240
 
@@ -600,8 +602,12 @@ interaction_handle_gateway:
     lea r8, [dashboard_general_dynamic]
     jmp .component_respond_json
 .component_back:
-    lea r8, [dashboard_back_response]
-    mov r9d, dashboard_back_response_len
+    mov edi, 7
+    call interaction_build_dashboard_main_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_main_dynamic]
     jmp .component_respond_json
 .component_denied:
     lea r8, [manager_denied_response]
@@ -942,8 +948,17 @@ interaction_handle_gateway:
     call interaction_is_manager
     test al, al
     jz .dashboard_denied
-    lea r8, [dashboard_main_response]
-    mov r9d, dashboard_main_response_len
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    call interaction_load_guild_id
+    test al, al
+    jz .component_config_failure
+    mov edi, 4
+    call interaction_build_dashboard_main_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_main_dynamic]
     lea rdi, [interaction_id]
     mov esi, [interaction_id_len]
     lea rdx, [interaction_token]
@@ -963,6 +978,82 @@ interaction_handle_gateway:
     jmp .out
 .ignored:
     xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; EDI=interaction response type 4 (initial) or 7 (component update). Builds
+; the source-equivalent dashboard description using a cached GUILD_CREATE name.
+; Cache miss or invalid cache output becomes a constant safe fallback. RAX is the
+; response length or -1 on capacity/escape failure; no partial JSON is exposed.
+interaction_build_dashboard_main_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12d, edi
+    cmp r12d, 4
+    je .type_ok
+    cmp r12d, 7
+    jne .bad
+.type_ok:
+    lea r13, [dashboard_guild_unknown]
+    mov r14d, dashboard_guild_unknown_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    call gateway_guild_name_get
+    test rax, rax
+    jz .prefix
+    test edx, edx
+    jle .prefix
+    cmp edx, DASHBOARD_TEXT_RENDER_CAP
+    ja .prefix
+    mov r13, rax
+    mov r14d, edx
+.prefix:
+    lea r15, [dashboard_main_initial_prefix]
+    mov ebx, dashboard_main_initial_prefix_len
+    cmp r12d, 4
+    je .build
+    lea r15, [dashboard_main_back_prefix]
+    mov ebx, dashboard_main_back_prefix_len
+.build:
+    mov eax, r14d
+    imul eax, eax, 6
+    add eax, ebx
+    add eax, dashboard_main_suffix_len
+    cmp eax, DASHBOARD_MAIN_DYNAMIC_CAP - 1
+    ja .bad
+    mov r12d, eax
+    lea rdi, [dashboard_main_dynamic]
+    mov rsi, r15
+    mov edx, ebx
+    call interaction_copy_bytes
+    lea rdi, [dashboard_main_dynamic + rbx]
+    mov esi, DASHBOARD_MAIN_DYNAMIC_CAP - 1
+    sub esi, ebx
+    sub esi, dashboard_main_suffix_len
+    mov rdx, r13
+    mov ecx, r14d
+    call json_escape_append
+    test eax, eax
+    js .bad
+    add ebx, eax
+    lea rdi, [dashboard_main_dynamic + rbx]
+    lea rsi, [dashboard_main_suffix]
+    mov edx, dashboard_main_suffix_len
+    call interaction_copy_bytes
+    add ebx, dashboard_main_suffix_len
+    mov byte [dashboard_main_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
 .out:
     pop r15
     pop r14
@@ -3240,10 +3331,14 @@ help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, 
 help_response_len equ $ - help_response
 manager_denied_response: db 'Khusus admin atau bot owner.'
 manager_denied_response_len equ $ - manager_denied_response
-dashboard_main_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
-dashboard_main_response_len equ $ - dashboard_main_response
-dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
-dashboard_back_response_len equ $ - dashboard_back_response
+dashboard_guild_unknown: db 'Tidak diketahui'
+dashboard_guild_unknown_len equ $ - dashboard_guild_unknown
+dashboard_main_initial_prefix: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **'
+dashboard_main_initial_prefix_len equ $ - dashboard_main_initial_prefix
+dashboard_main_back_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **'
+dashboard_main_back_prefix_len equ $ - dashboard_main_back_prefix
+dashboard_main_suffix: db '**\nPilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_main_suffix_len equ $ - dashboard_main_suffix
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
 dashboard_welcome_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","description":"Atur channel dan pesan melalui tombol di bawah."}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -3345,3 +3440,4 @@ dashboard_words_raw: resb DASHBOARD_WORDS_CAP
 dashboard_words_inline: resb DASHBOARD_WORDS_CAP
 dashboard_history_modal_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_general_disabled: resb DASHBOARD_WORDS_CAP
+dashboard_main_dynamic: resb DASHBOARD_MAIN_DYNAMIC_CAP

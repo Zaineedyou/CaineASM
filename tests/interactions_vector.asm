@@ -17,6 +17,7 @@ global guild_auth_roles_have
 global guild_config_get
 global state_format_banned_words
 global guild_channel_list
+global gateway_guild_name_get
 global groq_select_guild
 global groq_select_history
 global groq_chat_once
@@ -55,6 +56,7 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 3
+    mov byte [dashboard_guild_mode], 1
     lea rax, [dashboard_response]
     mov [expected_json_ptr], rax
     mov dword [expected_json_len], dashboard_response_len
@@ -77,6 +79,7 @@ _start:
     jnz .fail
     cmp qword [json_callback_calls], 2
     jne .fail
+    mov byte [dashboard_guild_mode], 0
 
     mov dword [failure_stage], 5
     mov byte [general_log_mode], 1
@@ -718,6 +721,18 @@ _start:
     jne .fail
     mov byte [status_history_mode], 0
 
+    mov dword [failure_stage], 30
+    lea rax, [dashboard_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_fallback_response_len
+    lea rdi, [dashboard_admin_frame]
+    mov esi, dashboard_admin_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 24
+    jne .fail
+
     mov dword [failure_stage], 29
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
@@ -747,7 +762,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 23
+    cmp qword [json_callback_calls], 24
     jne .fail
 
     mov dword [failure_stage], 31
@@ -983,6 +998,18 @@ guild_config_get:
 .out:
     pop r12
     pop rbx
+    ret
+
+; RDI=guild, ESI=guild len. Returns a cache-name seam for dashboard main/back.
+gateway_guild_name_get:
+    cmp byte [dashboard_guild_mode], 1
+    jne .miss
+    lea rax, [dashboard_guild_name]
+    mov edx, dashboard_guild_name_len
+    ret
+.miss:
+    xor eax, eax
+    xor edx, edx
     ret
 
 ; RDI=guild, ESI=guild len, RDX=out, ECX=capacity. Returns a fixed-capacity
@@ -1338,12 +1365,6 @@ discord_interaction_respond_json:
     xor eax, eax
     jmp .json_out
 .bad:
-    ; Temporary diagnostic for the active type-7 fixture mismatch.
-    mov edi, 1
-    mov rsi, rbx
-    mov edx, r12d
-    mov eax, 1
-    syscall
     mov eax, -1
 .json_out:
     pop r12
@@ -1455,10 +1476,12 @@ help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, 
 help_response_len equ $ - help_response
 manager_denied_response: db 'Khusus admin atau bot owner.'
 manager_denied_response_len equ $ - manager_denied_response
-dashboard_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **Caine ', 0x5c, '"Guild', 0x5c, 'nUtama**', 0x5c, 'nPilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
 dashboard_response_len equ $ - dashboard_response
-dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **Caine ', 0x5c, '"Guild', 0x5c, 'nUtama**', 0x5c, 'nPilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
 dashboard_back_response_len equ $ - dashboard_back_response
+dashboard_fallback_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Server: **Tidak diketahui**\nPilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_fallback_response_len equ $ - dashboard_fallback_response
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
 dashboard_welcome_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","fields":[{"name":"Welcome Channel","value":"<#111111111111111111>"},{"name":"Welcome Message","value":"`Halo ', 0x5c, '"Caine', 0x5c, '"', 0x5c, 0x5c, 0x5c, 'n{user}`"},{"name":"Goodbye Channel","value":"<#222222222222222222>"},{"name":"Goodbye Message","value":"`Sampai jumpa {username}`"},{"name":"Variabel","value":"`{user}` `{username}` `{server}` `{count}`"}]}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -1605,6 +1628,8 @@ healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada kompone
 healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
 status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"32 messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 status_dynamic_response_len equ $ - status_dynamic_response
+dashboard_guild_name: db 'Caine "Guild', 10, 'Utama'
+dashboard_guild_name_len equ $ - dashboard_guild_name
 general_log_channel: db '111111111111111111'
 general_log_channel_len equ $ - general_log_channel
 general_disabled_channels: db '<#333333333333333333>, <#444444444444444444>'
@@ -1634,6 +1659,7 @@ health_permission_allowed: db 1
 status_history_mode: db 0
 general_log_mode: db 0
 general_disabled_mode: db 0
+dashboard_guild_mode: db 0
 welcome_dashboard_mode: db 0
 autorole_dashboard_mode: db 0
 leveling_dashboard_mode: db 0

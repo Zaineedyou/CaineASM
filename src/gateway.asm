@@ -7,6 +7,7 @@ global gateway_reset_state
 global gateway_bot_user_id
 global gateway_bot_user_id_len
 global gateway_last_heartbeat_latency_ms
+global gateway_guild_name_get
 
 global gateway_send_identify
 global gateway_send_resume
@@ -19,6 +20,7 @@ extern secure_gateway_close
 extern discord_token_ptr
 extern discord_token_len
 extern json_find_key
+extern json_object_find_direct_key
 extern json_read_uint
 extern json_read_string
 extern json_escape_append
@@ -45,6 +47,9 @@ extern discord_register_application_commands
 %define RESUME_URL_CAP 512
 %define EVENT_NAME_CAP 64
 %define BOT_USER_ID_CAP 64
+%define GUILD_ID_CAP 64
+%define GUILD_NAME_CAP 128
+%define GUILD_CACHE_SLOTS 64
 
 %define ACTION_NONE 0
 %define ACTION_RECONNECT 1
@@ -233,8 +238,11 @@ gateway_process_frame:
     mov rdi, r12
     mov rsi, r13
     call channel_auth_cache_guild_create
-    ; Cache failures fail closed for role/channel-derived authorization but do
-    ; not invalidate an otherwise healthy Gateway session.
+    mov rdi, r12
+    mov rsi, r13
+    call gateway_cache_guild_name
+    ; Authorization and dashboard cache failures never invalidate an otherwise
+    ; healthy Gateway session; incomplete cache data displays a safe fallback.
     jmp .none
 .member_add:
     mov rdi, r12
@@ -437,6 +445,263 @@ gateway_cache_ready:
 .bad:
     mov eax, -1
     add rsp, 8
+    ret
+
+; RDI=complete GUILD_CREATE dispatch frame, RSI=frame len. EAX=0 only when a
+; direct payload id/name pair passes bounded text validation and is cached. This
+; cache is presentation-only; cache failure never affects Gateway liveness.
+gateway_cache_guild_name:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    test r12, r12
+    jz .bad
+    test r13, r13
+    jle .bad
+    mov rdi, r12
+    lea rsi, [r12 + r13]
+    lea rdx, [key_data]
+    mov ecx, key_data_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    lea rsi, [r12 + r13]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r14
+    lea rdx, [key_id]
+    mov ecx, key_id_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [guild_cache_id_scratch]
+    mov ecx, GUILD_ID_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov [guild_cache_id_scratch_len], eax
+    lea rdi, [guild_cache_id_scratch]
+    mov esi, eax
+    call gateway_decimal_id_valid
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    mov rsi, r14
+    lea rdx, [key_name]
+    mov ecx, key_name_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .bad
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [guild_cache_name_scratch]
+    mov ecx, GUILD_NAME_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .bad
+    mov [guild_cache_name_scratch_len], eax
+    lea rdi, [guild_cache_name_scratch]
+    mov esi, eax
+    call gateway_guild_name_valid
+    test al, al
+    jz .bad
+
+    xor ebx, ebx
+    mov r15d, -1
+.find_slot:
+    cmp ebx, GUILD_CACHE_SLOTS
+    jae .select_slot
+    cmp dword [guild_cache_id_lens + rbx * 4], 0
+    jne .match_slot
+    cmp r15d, -1
+    jne .next_slot
+    mov r15d, ebx
+    jmp .next_slot
+.match_slot:
+    mov eax, [guild_cache_id_lens + rbx * 4]
+    cmp eax, [guild_cache_id_scratch_len]
+    jne .next_slot
+    mov rax, rbx
+    imul rax, GUILD_ID_CAP
+    lea rdi, [guild_cache_ids + rax]
+    lea rsi, [guild_cache_id_scratch]
+    mov edx, [guild_cache_id_scratch_len]
+    call gateway_equal_bytes
+    test al, al
+    jz .next_slot
+    mov r15d, ebx
+    jmp .store
+.next_slot:
+    inc ebx
+    jmp .find_slot
+.select_slot:
+    cmp r15d, -1
+    jne .store
+    mov r15d, [guild_cache_evict]
+    inc dword [guild_cache_evict]
+    cmp dword [guild_cache_evict], GUILD_CACHE_SLOTS
+    jb .store
+    mov dword [guild_cache_evict], 0
+.store:
+    mov rax, r15
+    imul rax, GUILD_ID_CAP
+    lea rdi, [guild_cache_ids + rax]
+    lea rsi, [guild_cache_id_scratch]
+    mov edx, [guild_cache_id_scratch_len]
+    call copy_bytes
+    mov eax, r15d
+    imul rax, GUILD_NAME_CAP
+    lea rdi, [guild_cache_names + rax]
+    lea rsi, [guild_cache_name_scratch]
+    mov edx, [guild_cache_name_scratch_len]
+    call copy_bytes
+    mov eax, [guild_cache_id_scratch_len]
+    mov [guild_cache_id_lens + r15 * 4], eax
+    mov eax, [guild_cache_name_scratch_len]
+    mov [guild_cache_name_lens + r15 * 4], eax
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=guild decimal ID, ESI=len. RAX=name pointer and EDX=name length only for
+; an exact cache hit; otherwise both are zero. The returned pointer remains valid
+; until the single-threaded Gateway processes another GUILD_CREATE cache update.
+gateway_guild_name_get:
+    push rbx
+    push r12
+    push r13
+    test rdi, rdi
+    jz .miss
+    test esi, esi
+    jle .miss
+    mov r12, rdi
+    mov ebx, esi
+    xor r13d, r13d
+.loop:
+    cmp r13d, GUILD_CACHE_SLOTS
+    jae .miss
+    cmp dword [guild_cache_id_lens + r13 * 4], ebx
+    jne .next
+    mov rax, r13
+    imul rax, GUILD_ID_CAP
+    lea rdi, [guild_cache_ids + rax]
+    mov rsi, r12
+    mov edx, ebx
+    call gateway_equal_bytes
+    test al, al
+    jz .next
+    mov rax, r13
+    imul rax, GUILD_NAME_CAP
+    lea rax, [guild_cache_names + rax]
+    mov edx, [guild_cache_name_lens + r13 * 4]
+    jmp .out
+.next:
+    inc r13d
+    jmp .loop
+.miss:
+    xor eax, eax
+    xor edx, edx
+.out:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=ASCII ID, ESI=len. AL=1 only for nonzero decimal bytes up to capacity.
+gateway_decimal_id_valid:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, GUILD_ID_CAP - 1
+    ja .no
+    xor ecx, ecx
+    xor edx, edx
+.loop:
+    cmp ecx, esi
+    jae .done
+    mov al, [rdi + rcx]
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    ja .no
+    cmp al, '0'
+    jne .nonzero
+    inc ecx
+    jmp .loop
+.nonzero:
+    mov edx, 1
+    inc ecx
+    jmp .loop
+.done:
+    test edx, edx
+    jz .no
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=name, ESI=len. AL=1 only for 1..127 printable/UTF-8 byte sequences with
+; no C0 controls; Discord guild names are never permitted to inject controls.
+gateway_guild_name_valid:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, GUILD_NAME_CAP - 1
+    ja .no
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, 0x20
+    jb .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=left, RSI=right, EDX=count. AL=1 only for exact bytes.
+gateway_equal_bytes:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, [rsi + rcx]
+    jne .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; Build and send Gateway Identify. EAX=0 success, -1 failure.
@@ -796,6 +1061,16 @@ gateway_reset_state:
     mov dword [resume_url_len], 0
     mov dword [gateway_bot_user_id_len], 0
     mov byte [gateway_bot_user_id], 0
+    mov dword [guild_cache_evict], 0
+    xor ecx, ecx
+.clear_guild_cache:
+    cmp ecx, GUILD_CACHE_SLOTS
+    jae .cache_cleared
+    mov dword [guild_cache_id_lens + rcx * 4], 0
+    mov dword [guild_cache_name_lens + rcx * 4], 0
+    inc ecx
+    jmp .clear_guild_cache
+.cache_cleared:
     ret
 
 ; RDI=destination, RSI=source, EDX=count.
@@ -831,6 +1106,8 @@ key_user: db 'user'
 key_user_len equ $ - key_user
 key_id: db 'id'
 key_id_len equ $ - key_id
+key_name: db 'name'
+key_name_len equ $ - key_name
 event_ready: db 'READY'
 event_ready_len equ $ - event_ready
 event_resumed: db 'RESUMED'
@@ -885,6 +1162,7 @@ resume_url_len: dd 0
 gateway_bot_user_id_len: dd 0
 clock_spec: dq 0, 0
 jitter_seed: dq 0
+guild_cache_evict: dd 0
 
 section .bss
 gateway_buffer: resb GATEWAY_BUFFER_CAP
@@ -894,3 +1172,11 @@ resume_url: resb RESUME_URL_CAP
 gateway_bot_user_id: resb BOT_USER_ID_CAP
 event_name: resb EVENT_NAME_CAP
 uint_scratch: resb 21
+guild_cache_id_scratch: resb GUILD_ID_CAP
+guild_cache_id_scratch_len: resd 1
+guild_cache_name_scratch: resb GUILD_NAME_CAP
+guild_cache_name_scratch_len: resd 1
+guild_cache_ids: resb GUILD_CACHE_SLOTS * GUILD_ID_CAP
+guild_cache_id_lens: resd GUILD_CACHE_SLOTS
+guild_cache_names: resb GUILD_CACHE_SLOTS * GUILD_NAME_CAP
+guild_cache_name_lens: resd GUILD_CACHE_SLOTS

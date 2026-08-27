@@ -22,6 +22,7 @@ global discord_token_ptr
 global discord_token_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
+extern gateway_guild_name_get
 
 %define SYS_EXIT 60
 %define ACTION_RECONNECT 1
@@ -148,6 +149,28 @@ _start:
     jne .fail
     cmp qword [dispatch_calls], 0
     jne .fail
+    mov dword [failure_stage], 65
+    lea rdi, [cached_guild_id]
+    mov esi, cached_guild_id_len
+    call gateway_guild_name_get
+    test rax, rax
+    jz .fail
+    cmp edx, cached_guild_name_len
+    jne .fail
+    mov rdi, rax
+    lea rsi, [cached_guild_name]
+    mov edx, cached_guild_name_len
+    call equal_bytes
+    test al, al
+    jz .fail
+    mov dword [failure_stage], 66
+    lea rdi, [missing_guild_id]
+    mov esi, missing_guild_id_len
+    call gateway_guild_name_get
+    test rax, rax
+    jnz .fail
+    test edx, edx
+    jnz .fail
 
     ; MESSAGE_CREATE is dispatched only after its Gateway type is recognized.
     mov dword [failure_stage], 61
@@ -207,6 +230,14 @@ _start:
     jne .fail
     cmp qword [channel_reset_calls], 2
     jne .fail
+    mov dword [failure_stage], 81
+    lea rdi, [cached_guild_id]
+    mov esi, cached_guild_id_len
+    call gateway_guild_name_get
+    test rax, rax
+    jnz .fail
+    test edx, edx
+    jnz .fail
 
     mov eax, SYS_EXIT
     xor edi, edi
@@ -406,8 +437,14 @@ interaction_frame: db '{"op":0,"s":431,"t":"INTERACTION_CREATE","d":{"id":"11223
 interaction_frame_len equ $ - interaction_frame
 reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
-guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[]}}'
+guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","name":"Guild \"A\"","owner_id":"9001","roles":[]}}'
 guild_create_frame_len equ $ - guild_create_frame
+cached_guild_id: db '1001'
+cached_guild_id_len equ $ - cached_guild_id
+cached_guild_name: db 'Guild "A"'
+cached_guild_name_len equ $ - cached_guild_name
+missing_guild_id: db '1002'
+missing_guild_id_len equ $ - missing_guild_id
 member_add_frame: db '{"op":0,"s":45,"t":"GUILD_MEMBER_ADD","d":{"guild_id":"1001","user":{"id":"2001","username":"Alice"}}}'
 member_add_frame_len equ $ - member_add_frame
 member_remove_frame: db '{"op":0,"s":46,"t":"GUILD_MEMBER_REMOVE","d":{"guild_id":"1001","user":{"id":"2001","username":"Alice"}}}'
