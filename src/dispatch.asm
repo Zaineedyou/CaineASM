@@ -7,6 +7,7 @@ extern json_find_key
 extern json_read_string
 extern json_value_is_true
 extern json_object_end
+extern json_object_find_direct_key
 extern json_array_end
 extern command_classify
 extern discord_send_text
@@ -70,6 +71,8 @@ extern discord_bulk_delete_messages
 %define CHANNEL_ID_CAP 64
 %define GUILD_ID_CAP 64
 %define AUTHOR_ID_CAP 64
+%define AUTHOR_NAME_CAP 128
+%define AUTOMOD_LOG_TEXT_CAP 400
 %define COMMAND_CAP 64
 %define AI_REPLY_CAP 1901
 %define HISTORY_KEY_CAP 64
@@ -187,6 +190,7 @@ dispatch_message_create:
     ; Guild/user identity is optional for generic commands but required by AFK state.
     mov dword [guild_id_len], 0
     mov dword [author_id_len], 0
+    mov dword [author_name_len], 0
     mov rdi, r12
     mov rsi, r13
     lea rdx, [key_guild_id]
@@ -217,9 +221,9 @@ dispatch_message_create:
     call json_object_end
     test rax, rax
     jz .content
-    mov r9, rax
+    mov r15, rax
     mov rdi, rbx
-    mov rsi, r9
+    mov rsi, r15
     sub rsi, rbx
     lea rdx, [key_id]
     mov ecx, key_id_len
@@ -227,7 +231,7 @@ dispatch_message_create:
     test rax, rax
     jz .content
     mov rdi, rax
-    mov rsi, r9
+    mov rsi, r15
     lea rdx, [author_id]
     mov ecx, AUTHOR_ID_CAP - 1
     call json_read_string
@@ -235,6 +239,23 @@ dispatch_message_create:
     jle .content
     mov [author_id_len], eax
     mov byte [author_id + rax], 0
+    mov rdi, rbx
+    mov rsi, r15
+    lea rdx, [key_username]
+    mov ecx, key_username_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .author_name_done
+    mov rdi, rax
+    mov rsi, r15
+    lea rdx, [author_name]
+    mov ecx, AUTHOR_NAME_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .author_name_done
+    mov [author_name_len], eax
+    mov byte [author_name + rax], 0
+.author_name_done:
     cmp dword [guild_id_len], 0
     je .content
     lea rdi, [guild_id]
@@ -264,6 +285,7 @@ dispatch_message_create:
     test eax, eax
     js .handled
     mov r15d, eax
+    mov [message_content_len], eax
 
     ; Source-equivalent automod runs before XP/AFK routing and before disabled
     ; channel suppression. A malformed/missing message ID fails closed: no
@@ -277,6 +299,8 @@ dispatch_message_create:
     call guild_word_matches
     test rax, rax
     jz .automod_done
+    mov [automod_word_ptr], rax
+    mov [automod_word_len], edx
     mov rdi, r12
     mov rsi, r13
     lea rdx, [key_id]
@@ -296,6 +320,7 @@ dispatch_message_create:
     lea rdx, [automod_message_id]
     mov ecx, eax
     call discord_delete_message
+    call dispatch_log_automod
     lea rdi, [automod_response]
     mov esi, automod_response_len
     jmp .reply
@@ -2042,6 +2067,26 @@ dispatch_is_reply_to_bot:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; RDI=identifier bytes, ESI=len. AL=1 only for a nonzero ASCII decimal ID.
+dispatch_is_nonzero_decimal_identifier:
+    call dispatch_is_decimal_identifier
+    test al, al
+    jz .no
+    xor edx, edx
+.loop:
+    cmp edx, esi
+    jae .no
+    cmp byte [rdi + rdx], '0'
+    jne .yes
+    inc edx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; RDI=identifier bytes, ESI=len. AL=1 only for nonempty ASCII decimal IDs.
@@ -4100,6 +4145,171 @@ command_offset_after_prefix:
     mov eax, -1
     ret
 
+; Sends a bounded Automod audit line to the configured log channel only when the
+; persisted channel ID is a valid nonzero decimal. Audit delivery cannot reverse
+; a delete decision or prevent the user-facing Automod notice.
+dispatch_log_automod:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    cmp dword [guild_id_len], 0
+    jle .out
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .out
+    test edx, edx
+    jle .out
+    cmp edx, CHANNEL_ID_CAP - 1
+    ja .out
+    mov r12, rax
+    mov r13d, edx
+    mov rdi, r12
+    mov esi, r13d
+    call dispatch_is_nonzero_decimal_identifier
+    test al, al
+    jz .out
+    lea rdi, [report_log_channel]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    mov dword [report_log_len], 0
+    lea rdi, [automod_log_prefix]
+    mov esi, automod_log_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    cmp dword [author_name_len], 0
+    jle .author_id
+    lea rdi, [author_name]
+    mov esi, [author_name_len]
+    jmp .author_append
+.author_id:
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+.author_append:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [automod_log_channel_label]
+    mov esi, automod_log_channel_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [channel_id]
+    mov esi, [channel_id_len]
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [automod_log_word_label]
+    mov esi, automod_log_word_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov rdi, [automod_word_ptr]
+    mov esi, [automod_word_len]
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [automod_log_message_label]
+    mov esi, automod_log_message_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov esi, [message_content_len]
+    cmp esi, AUTOMOD_LOG_TEXT_CAP
+    jbe .message_cap_ready
+    mov esi, AUTOMOD_LOG_TEXT_CAP
+.message_cap_ready:
+    lea rdi, [message_content]
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [automod_log_fence]
+    mov esi, automod_log_fence_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [report_log_channel]
+    mov esi, r13d
+    lea rdx, [report_log]
+    mov ecx, [report_log_len]
+    call discord_send_text
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=source, ESI=len. EAX=out len or -1. Control/non-ASCII bytes become '?';
+; @ gains a UTF-8 zero-width separator and backticks become apostrophes, avoiding
+; notifications and code-fence injection in a plain-text audit message.
+automod_append_sanitized:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jl .bad
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .done
+    mov al, [rdi + rcx]
+    cmp al, '@'
+    je .at_sign
+    cmp al, '`'
+    je .backtick
+    cmp al, 32
+    jb .replacement
+    cmp al, 126
+    ja .replacement
+    mov edx, [report_log_len]
+    inc edx
+    cmp edx, REPORT_LOG_CAP
+    ja .bad
+    mov [report_log + rdx - 1], al
+    mov [report_log_len], edx
+    inc ecx
+    jmp .loop
+.at_sign:
+    mov edx, [report_log_len]
+    add edx, 4
+    cmp edx, REPORT_LOG_CAP
+    ja .bad
+    mov byte [report_log + rdx - 4], '@'
+    mov byte [report_log + rdx - 3], 0xe2
+    mov byte [report_log + rdx - 2], 0x80
+    mov byte [report_log + rdx - 1], 0x8b
+    mov [report_log_len], edx
+    inc ecx
+    jmp .loop
+.backtick:
+    mov al, 39
+    jmp .store_replacement
+.replacement:
+    mov al, '?'
+.store_replacement:
+    mov edx, [report_log_len]
+    inc edx
+    cmp edx, REPORT_LOG_CAP
+    ja .bad
+    mov [report_log + rdx - 1], al
+    mov [report_log_len], edx
+    inc ecx
+    jmp .loop
+.done:
+    mov eax, [report_log_len]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 ; RDI=source, ESI=len. EAX=output len or -1 if report buffer cannot hold all bytes.
 report_append_bytes:
     test rdi, rdi
@@ -4171,6 +4381,8 @@ key_guild_id: db 'guild_id'
 key_guild_id_len equ $ - key_guild_id
 key_author: db 'author'
 key_author_len equ $ - key_author
+key_username: db 'username'
+key_username_len equ $ - key_username
 key_member: db 'member'
 key_member_len equ $ - key_member
 key_roles: db 'roles'
@@ -4183,6 +4395,16 @@ key_gateway_data: db 'd'
 key_gateway_data_len equ $ - key_gateway_data
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
+automod_log_prefix: db 'AUTOMOD', 10, 'User: '
+automod_log_prefix_len equ $ - automod_log_prefix
+automod_log_channel_label: db 10, 'Channel: <#'
+automod_log_channel_label_len equ $ - automod_log_channel_label
+automod_log_word_label: db '>', 10, 'Kata Terlarang: ||'
+automod_log_word_label_len equ $ - automod_log_word_label
+automod_log_message_label: db '||', 10, 'Pesan: ```'
+automod_log_message_label_len equ $ - automod_log_message_label
+automod_log_fence: db '```'
+automod_log_fence_len equ $ - automod_log_fence
 report_usage_response: db 'Usage: report @user [reason].'
 report_usage_response_len equ $ - report_usage_response
 report_saved_response: db 'Report sent to the guild log channel.'
@@ -4417,10 +4639,13 @@ vision_b64_len: resd 1
 channel_id: resb CHANNEL_ID_CAP
 guild_id: resb GUILD_ID_CAP
 author_id: resb AUTHOR_ID_CAP
+author_name: resb AUTHOR_NAME_CAP
 argument_buffer: resb COMMAND_CAP
 guild_id_len: resd 1
 channel_id_len: resd 1
 author_id_len: resd 1
+author_name_len: resd 1
+message_content_len: resd 1
 rank_score: resd 1
 policy_command_op: resd 1
 dispatch_tail_ptr: resq 1
@@ -4434,6 +4659,8 @@ config_success_len: resd 1
 config_value_len: resd 1
 config_value: resb AUTHOR_ID_CAP
 automod_message_id: resb AUTHOR_ID_CAP
+automod_word_ptr: resq 1
+automod_word_len: resd 1
 warning_target_len: resd 1
 moderation_target_len: resd 1
 moderation_reason_ptr: resq 1

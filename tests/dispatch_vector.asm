@@ -506,7 +506,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [config_get_calls], 1
+    cmp qword [config_get_calls], 2
     jne .fail
     cmp qword [send_calls], 24
     jne .fail
@@ -518,7 +518,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [config_get_calls], 2
+    cmp qword [config_get_calls], 3
     jne .fail
     cmp qword [send_calls], 25
     jne .fail
@@ -1502,6 +1502,47 @@ _start:
     cmp qword [send_calls], 73
     jne .fail
 
+    mov dword [failure_stage], 74
+    mov dword [automod_enabled], 1
+    mov dword [report_log_enabled], 1
+    mov dword [automod_followup_enabled], 1
+    lea rax, [report_log_channel_value]
+    mov [expected_channel_ptr], rax
+    mov dword [expected_channel_len], report_log_channel_value_len
+    lea rax, [automod_audit_log]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], automod_audit_log_len
+    lea rdi, [automod_audit_event]
+    mov esi, automod_audit_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 2
+    jne .fail
+    cmp qword [config_get_calls], 4
+    jne .fail
+    cmp qword [send_calls], 75
+    jne .fail
+
+    mov dword [failure_stage], 75
+    mov dword [report_log_enabled], 2
+    mov qword [expected_channel_ptr], 0
+    mov dword [expected_channel_len], 0
+    lea rax, [automod_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], automod_response_len
+    lea rdi, [automod_event]
+    mov esi, automod_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [delete_calls], 3
+    jne .fail
+    cmp qword [config_get_calls], 5
+    jne .fail
+    cmp qword [send_calls], 76
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -2382,14 +2423,21 @@ guild_config_set:
 
 guild_config_get:
     inc qword [config_get_calls]
-    cmp dword [report_log_enabled], 0
-    je .absent
-    lea rax, [report_log_channel_value]
-    mov edx, report_log_channel_value_len
-    ret
+    cmp dword [report_log_enabled], 1
+    je .valid
+    cmp dword [report_log_enabled], 2
+    je .invalid
 .absent:
     xor eax, eax
     xor edx, edx
+    ret
+.valid:
+    lea rax, [report_log_channel_value]
+    mov edx, report_log_channel_value_len
+    ret
+.invalid:
+    lea rax, [invalid_log_channel_value]
+    mov edx, invalid_log_channel_value_len
     ret
 
 guild_config_delete:
@@ -2573,6 +2621,16 @@ discord_send_text:
     test al, al
     jz .bad_text_bytes
     inc qword [send_calls]
+    cmp dword [automod_followup_enabled], 0
+    je .report_followup
+    mov dword [automod_followup_enabled], 0
+    mov qword [expected_channel_ptr], 0
+    mov dword [expected_channel_len], 0
+    lea rax, [automod_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], automod_response_len
+    jmp .ok
+.report_followup:
     cmp dword [report_followup_enabled], 0
     je .ok
     mov dword [report_followup_enabled], 0
@@ -2777,6 +2835,8 @@ welcomemsg_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","ch
 welcomemsg_event_len equ $ - welcomemsg_event
 automod_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"998877665544332211","guild_id":"guild-1","channel_id":"123456789012345678","content":"blocked content","author":{"id":"user-2","bot":false}}}'
 automod_event_len equ $ - automod_event
+automod_audit_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"id":"998877665544332211","guild_id":"guild-1","channel_id":"123456789012345678","content":"blocked @here', 0x5c, 'n`code`","author":{"id":"user-2","username":"Alice@everyone","bot":false}}}'
+automod_audit_event_len equ $ - automod_audit_event
 warn_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^warn <@555> reason","author":{"id":"user-2","bot":false}}}'
 warn_event_len equ $ - warn_event
 warnings_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^warnings <@555>","author":{"id":"user-2","bot":false}}}'
@@ -2909,6 +2969,8 @@ text_saved_response: db 'Guild message setting saved.'
 text_saved_response_len equ $ - text_saved_response
 automod_response: db 'Automod: message deleted for a banned word.'
 automod_response_len equ $ - automod_response
+automod_audit_log: db 'AUTOMOD', 10, 'User: Alice@', 0xe2, 0x80, 0x8b, 'everyone', 10, 'Channel: <#123456789012345678>', 10, 'Kata Terlarang: ||blocked||', 10, 'Pesan: ```blocked @', 0xe2, 0x80, 0x8b, 'here?', 39, 'code', 39, '```'
+automod_audit_log_len equ $ - automod_audit_log
 blocked_word: db 'blocked'
 blocked_word_len equ $ - blocked_word
 automod_message_id: db '998877665544332211'
@@ -2929,6 +2991,8 @@ report_log_text: db 'REPORT', 10, 'Reporter: <@112233445566778899>', 10, 'Target
 report_log_text_len equ $ - report_log_text
 report_log_channel_value: db '998877665544332211'
 report_log_channel_value_len equ $ - report_log_channel_value
+invalid_log_channel_value: db '0000'
+invalid_log_channel_value_len equ $ - invalid_log_channel_value
 ai_error_response: db 'AI request failed. Please try again shortly.'
 ai_error_response_len equ $ - ai_error_response
 ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
@@ -2964,6 +3028,7 @@ config_get_calls: dq 0
 expected_channel_ptr: dq 0
 expected_channel_len: dd 0
 report_followup_enabled: dd 0
+automod_followup_enabled: dd 0
 report_log_enabled: dd 0
 delete_calls: dq 0
 clear_get_calls: dq 0
