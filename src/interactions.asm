@@ -75,9 +75,12 @@ interaction_handle_gateway:
     mov rsi, r14
     call json_read_uint
     jc .ignored
+    mov [interaction_type], eax
     cmp eax, 2
+    je .credentials
+    cmp eax, 3
     jne .ignored
-
+.credentials:
     ; Interaction ID and token occur at the interaction payload object level.
     mov rdi, rbx
     mov rsi, r14
@@ -114,6 +117,8 @@ interaction_handle_gateway:
     jle .ignored
     mov [interaction_token_len], eax
     mov byte [interaction_token + rax], 0
+    cmp dword [interaction_type], 3
+    je .component
 
     mov rdi, rbx
     mov rsi, r14
@@ -169,6 +174,65 @@ interaction_handle_gateway:
     test al, al
     jnz .dashboard
     jmp .ignored
+.component:
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    sub rsi, rbx
+    lea rdx, [key_command_data]
+    mov ecx, key_command_data_len
+    call json_find_key
+    test rax, rax
+    jz .ignored
+    mov r15, rax
+    mov rdi, r15
+    mov rsi, [interaction_payload_end]
+    call json_object_end
+    test rax, rax
+    jz .ignored
+    mov r14, rax
+    mov rdi, r15
+    mov rsi, r14
+    sub rsi, r15
+    lea rdx, [key_custom_id]
+    mov ecx, key_custom_id_len
+    call json_find_key
+    test rax, rax
+    jz .ignored
+    mov rdi, rax
+    mov rsi, r14
+    lea rdx, [interaction_component_id]
+    mov ecx, NAME_CAP - 1
+    call json_read_string
+    test eax, eax
+    jle .ignored
+    mov [interaction_component_id_len], eax
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    call interaction_is_manager
+    test al, al
+    jz .component_denied
+    lea rdi, [interaction_component_id]
+    mov esi, [interaction_component_id_len]
+    lea rdx, [component_back]
+    mov ecx, component_back_len
+    call equal_literal
+    test al, al
+    jz .ignored
+    lea r8, [dashboard_back_response]
+    mov r9d, dashboard_back_response_len
+    jmp .component_respond_json
+.component_denied:
+    lea r8, [manager_denied_response]
+    mov r9d, manager_denied_response_len
+    jmp .respond
+.component_respond_json:
+    lea rdi, [interaction_id]
+    mov esi, [interaction_id_len]
+    lea rdx, [interaction_token]
+    mov ecx, [interaction_token_len]
+    call discord_interaction_respond_json
+    jmp .out
+
 .info:
     lea r8, [info_response]
     mov r9d, info_response_len
@@ -428,6 +492,8 @@ key_member: db 'member'
 key_member_len equ $ - key_member
 key_user: db 'user'
 key_user_len equ $ - key_user
+key_custom_id: db 'custom_id'
+key_custom_id_len equ $ - key_custom_id
 key_permissions: db 'permissions'
 key_permissions_len equ $ - key_permissions
 key_type: db 'type'
@@ -442,6 +508,8 @@ name_help: db 'help'
 name_help_len equ $ - name_help
 name_dashboard: db 'dashboard'
 name_dashboard_len equ $ - name_dashboard
+component_back: db 'dash_back'
+component_back_len equ $ - component_back
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
 help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
@@ -450,6 +518,8 @@ manager_denied_response: db 'Khusus admin atau bot owner.'
 manager_denied_response_len equ $ - manager_denied_response
 dashboard_main_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
 dashboard_main_response_len equ $ - dashboard_main_response
+dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_back_response_len equ $ - dashboard_back_response
 
 section .bss
 interaction_id: resb FRAME_ID_CAP
@@ -462,3 +532,6 @@ interaction_payload_end: resq 1
 interaction_user_id: resb FRAME_ID_CAP
 interaction_user_id_len: resd 1
 interaction_permissions: resb 32
+interaction_type: resd 1
+interaction_component_id: resb NAME_CAP
+interaction_component_id_len: resd 1
