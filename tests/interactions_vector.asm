@@ -62,6 +62,18 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 5
+    lea rax, [dashboard_general_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_general_response_len
+    lea rdi, [dashboard_general_frame]
+    mov esi, dashboard_general_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 7
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], manager_denied_response_len
@@ -72,10 +84,10 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 2
+    cmp qword [json_callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 6
+    mov dword [failure_stage], 8
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
@@ -84,7 +96,7 @@ _start:
     cmp qword [callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 7
+    mov dword [failure_stage], 9
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
@@ -93,7 +105,7 @@ _start:
     cmp qword [callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 8
+    mov dword [failure_stage], 10
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
@@ -226,6 +238,8 @@ dashboard_denied_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"11
 dashboard_denied_frame_len equ $ - dashboard_denied_frame
 dashboard_back_frame: db '{"op":0,"s":5,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_back","component_type":2}}}'
 dashboard_back_frame_len equ $ - dashboard_back_frame
+dashboard_general_frame: db '{"op":0,"s":6,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_general","component_type":2}}}'
+dashboard_general_frame_len equ $ - dashboard_general_frame
 unknown_frame_len equ $ - unknown_frame
 wrong_type_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":4,"data":{"id":"4","name":"info","type":1}}}'
 wrong_type_frame_len equ $ - wrong_type_frame
@@ -241,6 +255,8 @@ dashboard_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,
 dashboard_response_len equ $ - dashboard_response
 dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
 dashboard_back_response_len equ $ - dashboard_back_response
+dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_general_response_len equ $ - dashboard_general_response
 
 section .data
 callback_calls: dq 0

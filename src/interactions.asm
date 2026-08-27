@@ -217,7 +217,18 @@ interaction_handle_gateway:
     mov ecx, component_back_len
     call equal_literal
     test al, al
+    jnz .component_back
+    lea rdi, [interaction_component_id]
+    mov esi, [interaction_component_id_len]
+    lea rdx, [component_general]
+    mov ecx, component_general_len
+    call equal_literal
+    test al, al
     jz .ignored
+    lea r8, [dashboard_general_response]
+    mov r9d, dashboard_general_response_len
+    jmp .component_respond_json
+.component_back:
     lea r8, [dashboard_back_response]
     mov r9d, dashboard_back_response_len
     jmp .component_respond_json
@@ -510,6 +521,8 @@ name_dashboard: db 'dashboard'
 name_dashboard_len equ $ - name_dashboard
 component_back: db 'dash_back'
 component_back_len equ $ - component_back
+component_general: db 'dash_general'
+component_general_len equ $ - component_general
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
 help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
@@ -520,6 +533,8 @@ dashboard_main_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":579
 dashboard_main_response_len equ $ - dashboard_main_response
 dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
 dashboard_back_response_len equ $ - dashboard_back_response
+dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_general_response_len equ $ - dashboard_general_response
 
 section .bss
 interaction_id: resb FRAME_ID_CAP
