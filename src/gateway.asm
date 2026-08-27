@@ -31,6 +31,7 @@ extern channel_auth_cache_guild_create
 extern lifecycle_member_add
 extern lifecycle_member_remove
 extern interaction_handle_gateway
+extern discord_register_application_commands
 
 %define SYS_NANOSLEEP 35
 %define SYS_CLOCK_GETTIME 228
@@ -212,6 +213,14 @@ gateway_process_frame:
     jnz .fatal
     mov byte [resume_allowed], 1
     mov byte [identified], 1
+    cmp byte [application_commands_attempted], 0
+    jne .none
+    mov byte [application_commands_attempted], 1
+    lea rdi, [gateway_bot_user_id]
+    mov esi, [gateway_bot_user_id_len]
+    call discord_register_application_commands
+    ; Registration failure is independent from gateway liveness. This one-shot
+    ; attempt prevents duplicate global commands on subsequent reconnects.
     jmp .none
 .resumed:
     mov byte [identified], 1
@@ -757,6 +766,7 @@ gateway_reset_state:
     call channel_auth_reset
     add rsp, 8
     mov byte [identified], 0
+    mov byte [application_commands_attempted], 0
     mov byte [hello_received], 0
     mov byte [heartbeat_ack_pending], 0
     mov byte [resume_allowed], 0
@@ -842,6 +852,7 @@ reconnect_pause: dq 2, 0
 section .data
 heartbeat_ms: dd 0
 identified: db 0
+application_commands_attempted: db 0
 hello_received: db 0
 heartbeat_ack_pending: db 0
 resume_allowed: db 0

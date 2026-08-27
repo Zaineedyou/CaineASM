@@ -17,6 +17,7 @@ global channel_auth_cache_guild_create
 global lifecycle_member_add
 global lifecycle_member_remove
 global interaction_handle_gateway
+global discord_register_application_commands
 global discord_token_ptr
 global discord_token_len
 extern gateway_bot_user_id
@@ -34,6 +35,7 @@ _start:
     mov qword [send_calls], 0
     mov qword [dispatch_calls], 0
     mov qword [interaction_calls], 0
+    mov qword [command_registration_calls], 0
 
     ; Hello starts the scheduler and sends an escaped bounded Identify payload.
     mov dword [failure_stage], 1
@@ -63,6 +65,19 @@ _start:
     call equal_bytes
     test al, al
     jz .fail
+    cmp qword [command_registration_calls], 1
+    jne .fail
+
+    ; A repeated READY re-caches session metadata but must not duplicate global
+    ; application command registration in the same process.
+    mov dword [failure_stage], 21
+    lea rdi, [ready_frame]
+    mov esi, ready_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    cmp qword [command_registration_calls], 1
+    jne .fail
 
     ; Server heartbeat request emits the stored sequence, then ACK is accepted.
     mov dword [failure_stage], 3
@@ -200,6 +215,13 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; READY registration seam. REST construction is covered by discord_rest_vector;
+; this vector only asserts routing and one-shot lifecycle behavior.
+discord_register_application_commands:
+    inc qword [command_registration_calls]
+    xor eax, eax
+    ret
 
 ; Auth cache seam: reset happens once for a process-start state reset.
 guild_auth_reset:
@@ -405,6 +427,7 @@ expected_payload_len: dd 0
 send_calls: dq 0
 dispatch_calls: dq 0
 interaction_calls: dq 0
+command_registration_calls: dq 0
 auth_reset_calls: dq 0
 auth_cache_calls: dq 0
 channel_cache_calls: dq 0

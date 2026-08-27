@@ -9,6 +9,7 @@ global discord_bulk_delete_messages
 global discord_interaction_respond_text
 global discord_interaction_respond_json
 global discord_interaction_edit_original
+global discord_register_application_commands
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -457,6 +458,171 @@ discord_interaction_edit_original:
     mov eax, -1
 .out:
     add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=application ID, ESI=ID len. Registers the four fixed command
+; definitions sequentially. EAX=0 only if every bounded authenticated POST
+; gets 2xx; no dynamic command text, user input, or token is persisted.
+discord_register_application_commands:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    test r12, r12
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, INTERACTION_ID_CAP - 1
+    ja .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    cmp dword [discord_token_len], 0
+    jle .bad
+    mov eax, [discord_token_len]
+    add eax, authorization_prefix_len
+    cmp eax, AUTHORIZATION_CAP - 1
+    ja .bad
+    xor r15d, r15d
+.loop:
+    cmp r15d, 4
+    jae .ok
+    mov rdx, [application_command_names + r15 * 8]
+    mov ecx, [application_command_name_lens + r15 * 4]
+    mov r8, [application_command_descriptions + r15 * 8]
+    mov r9d, [application_command_description_lens + r15 * 4]
+    mov rdi, r12
+    mov esi, r13d
+    call discord_register_one_application_command
+    test eax, eax
+    js .bad
+    inc r15d
+    jmp .loop
+.ok:
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=application ID, ESI=len, RDX=name, ECX=name len, R8=description,
+; R9D=description len. Internal static-command helper; EAX=0 for HTTP 2xx.
+discord_register_one_application_command:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [application_description_ptr], r8
+    mov [application_description_len], r9d
+    test r14, r14
+    jz .bad
+    test r15d, r15d
+    jle .bad
+    cmp r15d, 32
+    ja .bad
+    test r8, r8
+    jz .bad
+    test r9d, r9d
+    jle .bad
+    cmp r9d, 100
+    ja .bad
+    mov eax, application_command_prefix_len
+    add eax, r13d
+    add eax, application_command_suffix_len
+    cmp eax, REQUEST_URL_CAP - 1
+    ja .bad
+    lea rdi, [request_url]
+    lea rsi, [application_command_prefix]
+    mov edx, application_command_prefix_len
+    call copy_bytes
+    lea rdi, [request_url + application_command_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [request_url + application_command_prefix_len]
+    add rdi, r13
+    lea rsi, [application_command_suffix]
+    mov edx, application_command_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    mov byte [rdi], 0
+    lea rdi, [authorization]
+    lea rsi, [authorization_prefix]
+    mov edx, authorization_prefix_len
+    call copy_bytes
+    lea rdi, [authorization + authorization_prefix_len]
+    mov rsi, [discord_token_ptr]
+    mov edx, [discord_token_len]
+    call copy_bytes
+    mov byte [rdi + rdx], 0
+    lea rdi, [json_body]
+    lea rsi, [application_command_json_prefix]
+    mov edx, application_command_json_prefix_len
+    call copy_bytes
+    lea rdi, [json_body + application_command_json_prefix_len]
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    lea rdi, [json_body + application_command_json_prefix_len]
+    add rdi, r15
+    lea rsi, [application_command_json_middle]
+    mov edx, application_command_json_middle_len
+    call copy_bytes
+    add rdi, rdx
+    mov rsi, [application_description_ptr]
+    mov edx, [application_description_len]
+    call copy_bytes
+    add rdi, rdx
+    lea rsi, [application_command_json_suffix]
+    mov edx, application_command_json_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    mov byte [rdi], 0
+    mov eax, r15d
+    add eax, [application_description_len]
+    add eax, application_command_json_prefix_len + application_command_json_middle_len + application_command_json_suffix_len
+    cmp eax, JSON_BODY_CAP - 1
+    ja .bad
+    lea rdi, [request_url]
+    lea rsi, [authorization]
+    lea rdx, [json_body]
+    mov ecx, eax
+    lea r8, [response_body]
+    mov r9d, RESPONSE_BODY_CAP
+    call call_secure_post
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
     pop r15
     pop r14
     pop r13
@@ -2541,6 +2707,36 @@ interaction_callback_prefix: db 'https://discord.com/api/v10/interactions/'
 interaction_callback_prefix_len equ $ - interaction_callback_prefix
 interaction_callback_suffix: db '/callback'
 interaction_callback_suffix_len equ $ - interaction_callback_suffix
+application_command_prefix: db 'https://discord.com/api/v10/applications/'
+application_command_prefix_len equ $ - application_command_prefix
+application_command_suffix: db '/commands'
+application_command_suffix_len equ $ - application_command_suffix
+application_command_json_prefix: db '{"name":"'
+application_command_json_prefix_len equ $ - application_command_json_prefix
+application_command_json_middle: db '","description":"'
+application_command_json_middle_len equ $ - application_command_json_middle
+application_command_json_suffix: db '"}'
+application_command_json_suffix_len equ $ - application_command_json_suffix
+application_command_name_info: db 'info'
+application_command_name_info_len equ $ - application_command_name_info
+application_command_name_dashboard: db 'dashboard'
+application_command_name_dashboard_len equ $ - application_command_name_dashboard
+application_command_name_help: db 'help'
+application_command_name_help_len equ $ - application_command_name_help
+application_command_name_healthcheck: db 'healthcheck'
+application_command_name_healthcheck_len equ $ - application_command_name_healthcheck
+application_command_description_info: db 'Lihat info dan status bot Caine'
+application_command_description_info_len equ $ - application_command_description_info
+application_command_description_dashboard: db 'Buka dashboard pengaturan bot (Admin only)'
+application_command_description_dashboard_len equ $ - application_command_description_dashboard
+application_command_description_help: db 'Lihat semua command yang tersedia'
+application_command_description_help_len equ $ - application_command_description_help
+application_command_description_healthcheck: db 'Cek status semua komponen bot (Admin only)'
+application_command_description_healthcheck_len equ $ - application_command_description_healthcheck
+application_command_names: dq application_command_name_info, application_command_name_dashboard, application_command_name_help, application_command_name_healthcheck
+application_command_name_lens: dd application_command_name_info_len, application_command_name_dashboard_len, application_command_name_help_len, application_command_name_healthcheck_len
+application_command_descriptions: dq application_command_description_info, application_command_description_dashboard, application_command_description_help, application_command_description_healthcheck
+application_command_description_lens: dd application_command_description_info_len, application_command_description_dashboard_len, application_command_description_help_len, application_command_description_healthcheck_len
 interaction_webhook_prefix: db 'https://discord.com/api/v10/webhooks/'
 interaction_webhook_prefix_len equ $ - interaction_webhook_prefix
 interaction_original_suffix: db '/messages/@original'
@@ -2622,6 +2818,8 @@ audit_reason_len: dd 0
 interaction_content_ptr: dq 0
 interaction_content_len: dd 0
 interaction_flags: dq 0
+application_description_ptr: dq 0
+application_description_len: dd 0
 interaction_body_len: dd 0
 section .bss
 

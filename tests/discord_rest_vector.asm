@@ -9,6 +9,7 @@ extern discord_bulk_delete_messages
 extern discord_interaction_respond_text
 extern discord_interaction_respond_json
 extern discord_interaction_edit_original
+extern discord_register_application_commands
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -836,6 +837,32 @@ _start:
     cmp qword [delete_calls], 1
     jne .fail
 
+    ; Registration uses the READY-derived application ID, exact static payloads,
+    ; and stops immediately on a non-2xx outcome.
+    mov dword [failure_stage], 97
+    mov byte [registration_mode], 1
+    mov qword [registration_calls], 0
+    mov qword [mock_status], 201
+    lea rdi, [application_id]
+    mov esi, application_id_len
+    call discord_register_application_commands
+    test eax, eax
+    jnz .fail
+    cmp qword [registration_calls], 4
+    jne .fail
+
+    mov dword [failure_stage], 98
+    mov qword [registration_calls], 0
+    mov qword [mock_status], 429
+    lea rdi, [application_id]
+    mov esi, application_id_len
+    call discord_register_application_commands
+    cmp eax, -1
+    jne .fail
+    cmp qword [registration_calls], 1
+    jne .fail
+    mov byte [registration_mode], 0
+
     mov dword [failure_stage], 12
     lea rdi, [bad_get_url]
     mov esi, bad_get_url_len
@@ -865,6 +892,8 @@ _start:
 secure_https_post_json:
     push rbx
     mov rbx, rdx
+    cmp byte [registration_mode], 0
+    jne .registration
     mov r10, [expected_post_url_ptr]
     mov r11d, [expected_post_url_len]
     call equal_cstring
@@ -914,6 +943,51 @@ secure_https_post_json:
     mov eax, 1
     pop rbx
     ret
+.registration:
+    mov r10, [expected_registration_url_ptr]
+    mov r11d, [expected_registration_url_len_dynamic]
+    call equal_cstring
+    test al, al
+    jnz .registration_url_ok
+    mov dword [mock_failure_reason], 50
+    jmp .transport_fail
+.registration_url_ok:
+    mov rdi, rsi
+    lea r10, [expected_authorization]
+    mov r11d, expected_authorization_len
+    call equal_cstring
+    test al, al
+    jnz .registration_auth_ok
+    mov dword [mock_failure_reason], 51
+    jmp .transport_fail
+.registration_auth_ok:
+    mov eax, [registration_calls]
+    cmp eax, 4
+    jae .registration_bad
+    cmp ecx, [expected_registration_body_lens + rax * 4]
+    jne .registration_bad
+    mov rdi, rbx
+    mov rsi, [expected_registration_body_ptrs + rax * 8]
+    mov edx, [expected_registration_body_lens + rax * 4]
+    call equal_bytes
+    test al, al
+    jz .registration_bad
+    cmp r9, 2
+    jb .registration_bad
+    mov r10, [rsp + 16]
+    test r10, r10
+    jz .registration_bad
+    mov byte [r8], 0
+    mov rax, [mock_status]
+    mov [r10], rax
+    inc qword [registration_calls]
+    xor eax, eax
+    pop rbx
+    ret
+.registration_bad:
+    mov dword [mock_failure_reason], 52
+    jmp .transport_fail
+
 .transport_fail:
     mov eax, -1
     pop rbx
@@ -1390,6 +1464,18 @@ interaction_bad_token: db 'bad token'
 interaction_bad_token_len equ $ - interaction_bad_token
 application_id: db '998877665544332211'
 application_id_len equ $ - application_id
+expected_registration_url: db 'https://discord.com/api/v10/applications/998877665544332211/commands'
+expected_registration_url_len equ $ - expected_registration_url
+registration_body_info: db '{"name":"info","description":"Lihat info dan status bot Caine"}'
+registration_body_info_len equ $ - registration_body_info
+registration_body_dashboard: db '{"name":"dashboard","description":"Buka dashboard pengaturan bot (Admin only)"}'
+registration_body_dashboard_len equ $ - registration_body_dashboard
+registration_body_help: db '{"name":"help","description":"Lihat semua command yang tersedia"}'
+registration_body_help_len equ $ - registration_body_help
+registration_body_healthcheck: db '{"name":"healthcheck","description":"Cek status semua komponen bot (Admin only)"}'
+registration_body_healthcheck_len equ $ - registration_body_healthcheck
+expected_registration_body_ptrs: dq registration_body_info, registration_body_dashboard, registration_body_help, registration_body_healthcheck
+expected_registration_body_lens: dd registration_body_info_len, registration_body_dashboard_len, registration_body_help_len, registration_body_healthcheck_len
 interaction_text: db 'Hi "Caine"'
 interaction_text_len equ $ - interaction_text
 expected_interaction_url: db 'https://discord.com/api/v10/interactions/112233445566778899/abc_DEF-123.token/callback'
@@ -1507,6 +1593,10 @@ expected_unauth_body_len: dd 0
 unauth_status: dq 0
 unauth_calls: dq 0
 unauth_patch_calls: dq 0
+registration_mode: db 0
+registration_calls: dq 0
+expected_registration_url_ptr: dq expected_registration_url
+expected_registration_url_len_dynamic: dd expected_registration_url_len
 delete_status: dq 0
 expected_delete_ptr: dq 0
 expected_delete_len: dd 0
