@@ -3176,9 +3176,9 @@ report_log_channel_value: db '998877665544332211'
 report_log_channel_value_len equ $ - report_log_channel_value
 invalid_log_channel_value: db '0000'
 invalid_log_channel_value_len equ $ - invalid_log_channel_value
-ai_error_response: db 'AI request failed. Please try again shortly.'
+ai_error_response: db 0xe2, 0x9d, 0x8c, ' Ada error sayang, coba lagi ya ', 0xf0, 0x9f, 0x99, 0x8f
 ai_error_response_len equ $ - ai_error_response
-ai_rate_limited_response: db 'AI rate limit reached. Please wait before sending another request.'
+ai_rate_limited_response: db 0xe2, 0x8f, 0xb1, 0xef, 0xb8, 0x8f, ' Slow down! Kamu terlalu banyak ngirim pesan ke Caine. Tunggu sebentar ya.'
 ai_rate_limited_response_len equ $ - ai_rate_limited_response
 
 section .data
