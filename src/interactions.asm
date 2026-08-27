@@ -21,6 +21,7 @@ extern guild_auth_get_bot_roles
 extern guild_auth_roles_have
 extern guild_config_get
 extern state_format_banned_words
+extern guild_channel_list
 extern groq_select_guild
 extern groq_select_history
 extern groq_chat_once
@@ -1032,15 +1033,15 @@ interaction_build_history_modal_response:
     pop rbx
     ret
 
-; Builds a type-7 General Settings response. The sole dynamic fragment is a
-; decimal channel ID rendered as a mention, otherwise a constant safe fallback.
-; RAX=response length or -1 if a bounded output capacity check fails.
+; Builds a type-7 General Settings response with validated log and disabled
+; channel display data. RAX=response length or -1 if a bounded output fails.
 interaction_build_general_response:
     push rbx
     push r12
     push r13
     push r14
     push r15
+    sub rsp, 16
     lea r12, [general_log_unset]
     mov r15d, general_log_unset_len
     lea rdi, [interaction_guild_id]
@@ -1049,21 +1050,37 @@ interaction_build_general_response:
     mov ecx, setting_log_channel_len
     call guild_config_get
     test rax, rax
-    jz .build
+    jz .disabled
     test edx, edx
-    jle .build
+    jle .disabled
     mov r13, rax
     mov r14d, edx
     mov rdi, r13
     mov esi, r14d
     call decimal_id_valid
     test al, al
-    jz .build
+    jz .disabled
     mov r12, r13
     mov r15d, r14d
+.disabled:
+    mov [rsp], r12
+    mov dword [rsp + 8], r15d
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [dashboard_general_disabled]
+    mov ecx, DASHBOARD_WORDS_CAP
+    call guild_channel_list
+    test eax, eax
+    js .bad
+    lea r13, [dashboard_general_disabled]
+    mov r14d, eax
+    mov r12, [rsp]
+    mov r15d, [rsp + 8]
 .build:
     mov eax, dashboard_general_prefix_len
     add eax, r15d
+    add eax, dashboard_general_middle_len
+    add eax, r14d
     add eax, dashboard_general_suffix_len
     cmp eax, DASHBOARD_DYNAMIC_CAP - 1
     ja .bad
@@ -1078,6 +1095,14 @@ interaction_build_general_response:
     call interaction_copy_bytes
     lea rdi, [dashboard_general_dynamic + dashboard_general_prefix_len]
     add rdi, r15
+    lea rsi, [dashboard_general_middle]
+    mov edx, dashboard_general_middle_len
+    call interaction_copy_bytes
+    add rdi, dashboard_general_middle_len
+    mov rsi, r13
+    mov edx, r14d
+    call interaction_copy_bytes
+    add rdi, r14
     lea rsi, [dashboard_general_suffix]
     mov edx, dashboard_general_suffix_len
     call interaction_copy_bytes
@@ -1087,6 +1112,7 @@ interaction_build_general_response:
 .bad:
     mov eax, -1
 .out:
+    add rsp, 16
     pop r15
     pop r14
     pop r13
@@ -3192,7 +3218,9 @@ dashboard_welcome_suffix: db '`"},{"name":"Variabel","value":"`{user}` `{usernam
 dashboard_welcome_suffix_len equ $ - dashboard_welcome_suffix
 dashboard_general_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"'
 dashboard_general_prefix_len equ $ - dashboard_general_prefix
-dashboard_general_suffix: db '"},{"name":"Disabled Channels","value":"Tidak ada atau tidak tercache."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_general_middle: db '"},{"name":"Disabled Channels","value":"'
+dashboard_general_middle_len equ $ - dashboard_general_middle
+dashboard_general_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_suffix_len equ $ - dashboard_general_suffix
 status_default_history: db '30'
 status_default_history_len equ $ - status_default_history
@@ -3316,3 +3344,4 @@ dashboard_moderation_dynamic: resb DASHBOARD_MODERATION_DYNAMIC_CAP
 dashboard_words_raw: resb DASHBOARD_WORDS_CAP
 dashboard_words_inline: resb DASHBOARD_WORDS_CAP
 dashboard_history_modal_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_general_disabled: resb DASHBOARD_WORDS_CAP

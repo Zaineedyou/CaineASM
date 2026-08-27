@@ -7,6 +7,7 @@ global guild_word_matches
 global guild_channel_disable
 global guild_channel_enable
 global guild_channel_is_disabled
+global guild_channel_list
 
 extern store_set
 extern store_get
@@ -15,6 +16,7 @@ extern store_foreach
 
 %define STORE_KEY_MAX 95
 %define POLICY_KEY_CAP 96
+%define POLICY_LIST_CAP 512
 
 ; Bounded durable policy state. Banned-word entries use word:<guild>:<word>
 ; while disabled-channel entries use disabled:<guild>:<channel>. All reads of
@@ -221,6 +223,246 @@ guild_channel_is_disabled:
     pop r12
     ret
 
+; RDI=guild, ESI=guild len, RDX=output, ECX=output cap. EAX=rendered byte
+; length or -1. The list contains only validated decimal channel IDs as Discord
+; mentions, separated by comma+space; no store value bytes are exposed. Output
+; is capped at 512 bytes, and a non-fitting additional row requires a bounded
+; truncation marker rather than a partial entry.
+guild_channel_list:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    test rdx, rdx
+    jz .bad
+    test ecx, ecx
+    jle .bad
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    cmp r15d, POLICY_LIST_CAP
+    jbe .cap_ready
+    mov r15d, POLICY_LIST_CAP
+.cap_ready:
+    mov [list_guild_ptr], r12
+    mov [list_guild_len], r13d
+    mov [list_out_ptr], r14
+    mov [list_out_cap], r15d
+    mov dword [list_out_len], 0
+    mov dword [list_match_count], 0
+    mov dword [list_truncated], 0
+    lea rdi, [channel_list_callback]
+    xor esi, esi
+    call store_foreach
+    test eax, eax
+    js .bad
+    cmp dword [list_match_count], 0
+    jne .nonempty
+    lea rdi, [channel_list_empty]
+    mov esi, channel_list_empty_len
+    call channel_list_append
+    test eax, eax
+    js .bad
+    jmp .done
+.nonempty:
+    cmp dword [list_truncated], 0
+    je .done
+    mov eax, [list_out_len]
+    add eax, channel_list_truncated_len
+    cmp eax, [list_out_cap]
+    ja .done
+    lea rdi, [channel_list_truncated]
+    mov esi, channel_list_truncated_len
+    call channel_list_append
+    test eax, eax
+    js .bad
+.done:
+    mov eax, [list_out_len]
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; store_foreach callback for disabled:<guild>:<channel> state. It ignores
+; malformed keys/IDs. A positive return stops successfully after setting the
+; truncation flag, preserving a complete bounded prefix of the list.
+channel_list_callback:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rsi
+    mov r13d, edx
+    mov eax, disabled_prefix_len
+    add eax, [list_guild_len]
+    add eax, 2                         ; guild separator plus at least one ID byte
+    cmp r13d, eax
+    jb .ignore
+    xor ebx, ebx
+.prefix:
+    cmp ebx, disabled_prefix_len
+    jae .guild
+    mov al, [r12 + rbx]
+    cmp al, [disabled_prefix + rbx]
+    jne .ignore
+    inc ebx
+    jmp .prefix
+.guild:
+    xor ebx, ebx
+    mov r14d, [list_guild_len]
+.guild_loop:
+    cmp ebx, r14d
+    jae .separator
+    mov r11, [list_guild_ptr]
+    mov al, [r12 + rbx + disabled_prefix_len]
+    cmp al, [r11 + rbx]
+    jne .ignore
+    inc ebx
+    jmp .guild_loop
+.separator:
+    mov eax, disabled_prefix_len
+    add eax, r14d
+    cmp byte [r12 + rax], ':'
+    jne .ignore
+    inc eax
+    lea r15, [r12 + rax]
+    mov edx, r13d
+    sub edx, eax
+    jle .ignore
+    mov r14d, edx
+    mov rdi, r15
+    mov esi, edx
+    call channel_list_decimal_valid
+    test al, al
+    jz .ignore
+    mov ebx, [list_out_len]
+    mov eax, r14d
+    add eax, 3                         ; <# plus >
+    cmp dword [list_match_count], 0
+    je .need_ready
+    add eax, 2                         ; comma+space
+.need_ready:
+    add eax, ebx
+    cmp eax, [list_out_cap]
+    ja .stop
+    cmp dword [list_match_count], 0
+    je .mention
+    lea rdi, [channel_list_separator]
+    mov esi, channel_list_separator_len
+    call channel_list_append
+    test eax, eax
+    js .abort
+.mention:
+    lea rdi, [channel_list_mention_prefix]
+    mov esi, channel_list_mention_prefix_len
+    call channel_list_append
+    test eax, eax
+    js .abort
+    mov rdi, r15
+    mov esi, r14d
+    call channel_list_append
+    test eax, eax
+    js .abort
+    lea rdi, [channel_list_mention_suffix]
+    mov esi, channel_list_mention_suffix_len
+    call channel_list_append
+    test eax, eax
+    js .abort
+    inc dword [list_match_count]
+.ignore:
+    xor eax, eax
+    jmp .out
+.stop:
+    mov dword [list_truncated], 1
+    mov eax, 1
+    jmp .out
+.abort:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=ASCII ID, ESI=len. AL=1 only for a nonzero decimal identifier.
+channel_list_decimal_valid:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, 63
+    ja .no
+    xor ecx, ecx
+    xor edx, edx
+.loop:
+    cmp ecx, esi
+    jae .done
+    mov al, [rdi + rcx]
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    ja .no
+    cmp al, '0'
+    jne .nonzero
+    inc ecx
+    jmp .loop
+.nonzero:
+    mov edx, 1
+    inc ecx
+    jmp .loop
+.done:
+    test edx, edx
+    jz .no
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; RDI=source, ESI=len. Appends to the private bounded list output.
+channel_list_append:
+    test rdi, rdi
+    jz .bad
+    test esi, esi
+    jle .bad
+    mov eax, [list_out_len]
+    add eax, esi
+    cmp eax, [list_out_cap]
+    ja .bad
+    mov r8, [list_out_ptr]
+    mov edx, [list_out_len]
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .done
+    mov r11b, [rdi + rcx]
+    lea rax, [rdx + rcx]
+    mov [r8 + rax], r11b
+    inc ecx
+    jmp .loop
+.done:
+    add dword [list_out_len], esi
+    mov eax, [list_out_len]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 ; store_foreach callback. It checks a word:<guild>:<word> key and stops at
 ; the first configured word that occurs in the supplied text.
 word_match_callback:
@@ -398,6 +640,16 @@ disabled_prefix: db 'disabled:'
 disabled_prefix_len equ $ - disabled_prefix
 present_value: db '1'
 present_value_len equ $ - present_value
+channel_list_empty: db 'Tidak ada'
+channel_list_empty_len equ $ - channel_list_empty
+channel_list_truncated: db ', [truncated]'
+channel_list_truncated_len equ $ - channel_list_truncated
+channel_list_separator: db ', '
+channel_list_separator_len equ $ - channel_list_separator
+channel_list_mention_prefix: db '<#'
+channel_list_mention_prefix_len equ $ - channel_list_mention_prefix
+channel_list_mention_suffix: db '>'
+channel_list_mention_suffix_len equ $ - channel_list_mention_suffix
 
 section .data
 policy_key_len: dd 0
@@ -410,3 +662,10 @@ match_word_len: dd 0
 
 section .bss
 policy_key: resb POLICY_KEY_CAP
+list_guild_ptr: resq 1
+list_guild_len: resd 1
+list_out_ptr: resq 1
+list_out_cap: resd 1
+list_out_len: resd 1
+list_match_count: resd 1
+list_truncated: resd 1

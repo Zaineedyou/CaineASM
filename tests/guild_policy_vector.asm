@@ -9,6 +9,7 @@ extern guild_word_matches
 extern guild_channel_disable
 extern guild_channel_enable
 extern guild_channel_is_disabled
+extern guild_channel_list
 
 %define SYS_EXIT 60
 
@@ -109,6 +110,49 @@ _start:
     jnz .fail
     lea rdi, [guild_one]
     mov esi, guild_one_len
+    lea rdx, [channel_two]
+    mov ecx, channel_two_len
+    call guild_channel_disable
+    test eax, eax
+    jnz .fail
+    ; A malformed direct policy write must never be rendered by enumeration.
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [bad_channel]
+    mov ecx, bad_channel_len
+    call guild_channel_disable
+    test eax, eax
+    jnz .fail
+    mov dword [failure_stage], 41
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [channel_list_output]
+    mov ecx, 512
+    call guild_channel_list
+    cmp eax, channel_list_expected_len
+    jne .fail
+    lea rdi, [channel_list_output]
+    lea rsi, [channel_list_expected]
+    mov edx, channel_list_expected_len
+    call equal_bytes_exact
+    test al, al
+    jz .fail
+    mov dword [failure_stage], 42
+    lea rdi, [guild_two]
+    mov esi, guild_two_len
+    lea rdx, [channel_list_output]
+    mov ecx, 512
+    call guild_channel_list
+    cmp eax, channel_list_empty_len
+    jne .fail
+    lea rdi, [channel_list_output]
+    lea rsi, [channel_list_empty]
+    mov edx, channel_list_empty_len
+    call equal_bytes_exact
+    test al, al
+    jz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
     lea rdx, [channel_one]
     mov ecx, channel_one_len
     call guild_channel_enable
@@ -116,11 +160,25 @@ _start:
     jnz .fail
     lea rdi, [guild_one]
     mov esi, guild_one_len
-    lea rdx, [channel_one]
-    mov ecx, channel_one_len
-    call guild_channel_is_disabled
-    test al, al
+    lea rdx, [channel_two]
+    mov ecx, channel_two_len
+    call guild_channel_enable
+    test eax, eax
     jnz .fail
+    mov dword [failure_stage], 43
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [channel_list_output]
+    mov ecx, 512
+    call guild_channel_list
+    cmp eax, channel_list_empty_len
+    jne .fail
+    lea rdi, [channel_list_output]
+    lea rsi, [channel_list_empty]
+    mov edx, channel_list_empty_len
+    call equal_bytes_exact
+    test al, al
+    jz .fail
 
     mov dword [failure_stage], 5
     ; Empty components and an oversized final key fail deterministically.
@@ -150,6 +208,14 @@ _start:
     xor edi, edi
     syscall
 .fail:
+    cmp dword [failure_stage], 41
+    jne .exit
+    mov edi, 1
+    lea rsi, [channel_list_output]
+    mov edx, 512
+    mov eax, 1
+    syscall
+.exit:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
@@ -175,6 +241,24 @@ equal_bytes_folded:
 .no:
     xor eax, eax
     ret
+; RDI and RSI buffers, EDX=count. AL=1 only for exact byte equality.
+equal_bytes_exact:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, [rsi + rcx]
+    jne .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 fold_ascii:
     cmp al, 'A'
     jb .out
@@ -200,10 +284,19 @@ channel_one: db '111111111111111111'
 channel_one_len equ $ - channel_one
 channel_two: db '222222222222222222'
 channel_two_len equ $ - channel_two
+bad_channel: db 'not-a-channel'
+bad_channel_len equ $ - bad_channel
+channel_list_expected: db '<#111111111111111111>, <#222222222222222222>'
+channel_list_expected_len equ $ - channel_list_expected
+channel_list_empty: db 'Tidak ada'
+channel_list_empty_len equ $ - channel_list_empty
 long_guild: times 70 db 'g'
 long_guild_len equ $ - long_guild
 long_word: times 20 db 'w'
 long_word_len equ $ - long_word
+
+section .bss
+channel_list_output: resb 512
 
 section .data
 failure_stage: dd 0

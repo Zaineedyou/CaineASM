@@ -16,6 +16,7 @@ global guild_auth_get_bot_roles
 global guild_auth_roles_have
 global guild_config_get
 global state_format_banned_words
+global guild_channel_list
 global groq_select_guild
 global groq_select_history
 global groq_chat_once
@@ -79,6 +80,7 @@ _start:
 
     mov dword [failure_stage], 5
     mov byte [general_log_mode], 1
+    mov byte [general_disabled_mode], 1
     lea rax, [dashboard_general_dynamic_response]
     mov [expected_json_ptr], rax
     mov dword [expected_json_len], dashboard_general_dynamic_response_len
@@ -90,6 +92,7 @@ _start:
     cmp qword [json_callback_calls], 3
     jne .fail
     mov byte [general_log_mode], 0
+    mov byte [general_disabled_mode], 0
 
     mov dword [failure_stage], 6
     mov byte [welcome_dashboard_mode], 1
@@ -982,6 +985,39 @@ guild_config_get:
     pop rbx
     ret
 
+; RDI=guild, ESI=guild len, RDX=out, ECX=capacity. Returns a fixed-capacity
+; disabled-channel display seam for the General Settings renderer.
+guild_channel_list:
+    push rbx
+    mov rbx, rdx
+    cmp byte [general_disabled_mode], 1
+    jne .empty
+    lea rdi, [general_disabled_channels]
+    mov esi, general_disabled_channels_len
+    jmp .copy
+.empty:
+    lea rdi, [general_disabled_empty]
+    mov esi, general_disabled_empty_len
+.copy:
+    cmp ecx, esi
+    jb .bad
+    xor edx, edx
+.copy_loop:
+    cmp edx, esi
+    jae .done
+    mov al, [rdi + rdx]
+    mov [rbx + rdx], al
+    inc edx
+    jmp .copy_loop
+.done:
+    mov eax, esi
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
+    ret
+
 ; RDI=guild, ESI=guild len, RDX=out, ECX=capacity. This seam returns only
 ; formatter-shaped bounded rows so the interaction renderer verifies its header
 ; and row transformation path without accessing the real state store.
@@ -1571,7 +1607,11 @@ status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":654
 status_dynamic_response_len equ $ - status_dynamic_response
 general_log_channel: db '111111111111111111'
 general_log_channel_len equ $ - general_log_channel
-dashboard_general_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"111111111111111111"},{"name":"Disabled Channels","value":"Tidak ada atau tidak tercache."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+general_disabled_channels: db '<#333333333333333333>, <#444444444444444444>'
+general_disabled_channels_len equ $ - general_disabled_channels
+general_disabled_empty: db 'Tidak ada'
+general_disabled_empty_len equ $ - general_disabled_empty
+dashboard_general_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"111111111111111111"},{"name":"Disabled Channels","value":"<#333333333333333333>, <#444444444444444444>"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_dynamic_response_len equ $ - dashboard_general_dynamic_response
 health_probe_setting: db '__healthcheck_probe__'
 health_probe_setting_len equ $ - health_probe_setting
@@ -1593,6 +1633,7 @@ autorole_hierarchy_allowed: db 0
 health_permission_allowed: db 1
 status_history_mode: db 0
 general_log_mode: db 0
+general_disabled_mode: db 0
 welcome_dashboard_mode: db 0
 autorole_dashboard_mode: db 0
 leveling_dashboard_mode: db 0
