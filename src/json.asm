@@ -3,6 +3,7 @@ DEFAULT REL
 
 global json_escape_append
 global json_find_key
+global json_object_find_direct_key
 global json_read_uint
 global json_read_string
 global json_value_is_true
@@ -96,6 +97,625 @@ json_escape_append:
     ret
 .bad:
     mov eax, -1
+    ret
+
+; RDI=opening object brace, RSI=exclusive object end, RDX=unquoted ASCII key,
+; ECX=key length. RAX=the direct member value pointer only when the key occurs
+; exactly once. Zero means malformed JSON, non-object input, absent/duplicate
+; key, or bytes after the closing brace. Nested keys can never match.
+json_object_find_direct_key:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, rdi
+    jz .none
+    cmp rdi, rsi
+    jae .none
+    test rcx, rcx
+    jz .none
+    cmp byte [rdi], '{'
+    jne .none
+    mov rbx, rdi
+    mov r11, rsi
+    mov r12, rdx
+    mov r13d, ecx
+    xor r14d, r14d                 ; matched value pointer
+    xor r15d, r15d                 ; exact key occurrence count
+    inc rbx
+.first_ws:
+    cmp rbx, r11
+    jae .none
+    mov al, [rbx]
+    cmp al, ' '
+    je .first_ws_advance
+    cmp al, 9
+    je .first_ws_advance
+    cmp al, 10
+    je .first_ws_advance
+    cmp al, 13
+    je .first_ws_advance
+    cmp al, '}'
+    je .close
+    jmp .member
+.first_ws_advance:
+    inc rbx
+    jmp .first_ws
+.member:
+    cmp byte [rbx], '"'
+    jne .none
+    mov rdi, rbx
+    mov rsi, r11
+    call json_direct_string_end
+    test rax, rax
+    jz .none
+    mov r9, rax
+    xor r10d, r10d
+    mov r8, r9
+    sub r8, rbx
+    sub r8, 2
+    cmp r8d, r13d
+    jne .after_key
+    xor eax, eax
+.key_compare:
+    cmp eax, r13d
+    jae .key_match
+    mov dl, [rbx + rax + 1]
+    cmp dl, [r12 + rax]
+    jne .after_key
+    inc eax
+    jmp .key_compare
+.key_match:
+    mov r10d, 1
+.after_key:
+    mov rbx, r9
+.key_ws:
+    cmp rbx, r11
+    jae .none
+    mov al, [rbx]
+    cmp al, ' '
+    je .key_ws_advance
+    cmp al, 9
+    je .key_ws_advance
+    cmp al, 10
+    je .key_ws_advance
+    cmp al, 13
+    je .key_ws_advance
+    cmp al, ':'
+    jne .none
+    inc rbx
+.value_ws:
+    cmp rbx, r11
+    jae .none
+    mov al, [rbx]
+    cmp al, ' '
+    je .value_ws_advance
+    cmp al, 9
+    je .value_ws_advance
+    cmp al, 10
+    je .value_ws_advance
+    cmp al, 13
+    je .value_ws_advance
+    jmp .value
+.key_ws_advance:
+    inc rbx
+    jmp .key_ws
+.value_ws_advance:
+    inc rbx
+    jmp .value_ws
+.value:
+    test r10d, r10d
+    jz .skip_value
+    inc r15d
+    cmp r15d, 1
+    jne .none
+    mov r14, rbx
+.skip_value:
+    mov rdi, rbx
+    mov rsi, r11
+    call json_direct_value_end
+    test rax, rax
+    jz .none
+    mov rbx, rax
+.tail_ws:
+    cmp rbx, r11
+    jae .none
+    mov al, [rbx]
+    cmp al, ' '
+    je .tail_ws_advance
+    cmp al, 9
+    je .tail_ws_advance
+    cmp al, 10
+    je .tail_ws_advance
+    cmp al, 13
+    je .tail_ws_advance
+    cmp al, ','
+    je .comma
+    cmp al, '}'
+    je .close
+    jmp .none
+.tail_ws_advance:
+    inc rbx
+    jmp .tail_ws
+.comma:
+    inc rbx
+.next_member_ws:
+    cmp rbx, r11
+    jae .none
+    mov al, [rbx]
+    cmp al, ' '
+    je .next_member_ws_advance
+    cmp al, 9
+    je .next_member_ws_advance
+    cmp al, 10
+    je .next_member_ws_advance
+    cmp al, 13
+    je .next_member_ws_advance
+    cmp al, '"'
+    jne .none
+    jmp .member
+.next_member_ws_advance:
+    inc rbx
+    jmp .next_member_ws
+.close:
+    inc rbx
+    cmp rbx, r11
+    jne .none
+    cmp r15d, 1
+    jne .none
+    mov rax, r14
+    jmp .out
+.none:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=value start, RSI=exclusive JSON end. RAX=first byte after one complete
+; strict JSON value or zero. Recursion is capped to keep hostile nesting bounded.
+json_direct_value_end:
+    push r10
+    cmp dword [json_strict_depth], 32
+    jae .bad
+    inc dword [json_strict_depth]
+    cmp rdi, rsi
+    jae .bad_depth
+    mov al, [rdi]
+    cmp al, '"'
+    je .string
+    cmp al, '{'
+    je .object
+    cmp al, '['
+    je .array
+    cmp al, 't'
+    je .true
+    cmp al, 'f'
+    je .false
+    cmp al, 'n'
+    je .null
+    cmp al, '-'
+    je .number
+    cmp al, '0'
+    jb .bad_depth
+    cmp al, '9'
+    ja .bad_depth
+.number:
+    mov rax, rdi
+    cmp byte [rax], '-'
+    jne .integer
+    inc rax
+    cmp rax, rsi
+    jae .bad_depth
+.integer:
+    mov dl, [rax]
+    cmp dl, '0'
+    je .zero_integer
+    cmp dl, '1'
+    jb .bad_depth
+    cmp dl, '9'
+    ja .bad_depth
+.integer_digits:
+    inc rax
+    cmp rax, rsi
+    jae .number_done
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .fraction
+    cmp dl, '9'
+    ja .fraction
+    jmp .integer_digits
+.zero_integer:
+    inc rax
+    cmp rax, rsi
+    jae .number_done
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .fraction
+    cmp dl, '9'
+    jbe .bad_depth
+.fraction:
+    cmp dl, '.'
+    jne .exponent
+    inc rax
+    cmp rax, rsi
+    jae .bad_depth
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .bad_depth
+    cmp dl, '9'
+    ja .bad_depth
+.fraction_digits:
+    inc rax
+    cmp rax, rsi
+    jae .number_done
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .exponent
+    cmp dl, '9'
+    ja .exponent
+    jmp .fraction_digits
+.exponent:
+    cmp dl, 'e'
+    je .exponent_start
+    cmp dl, 'E'
+    jne .number_done
+.exponent_start:
+    inc rax
+    cmp rax, rsi
+    jae .bad_depth
+    mov dl, [rax]
+    cmp dl, '+'
+    je .exponent_sign
+    cmp dl, '-'
+    je .exponent_sign
+    jmp .exponent_digit
+.exponent_sign:
+    inc rax
+    cmp rax, rsi
+    jae .bad_depth
+    mov dl, [rax]
+.exponent_digit:
+    cmp dl, '0'
+    jb .bad_depth
+    cmp dl, '9'
+    ja .bad_depth
+.exponent_digits:
+    inc rax
+    cmp rax, rsi
+    jae .number_done
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .number_done
+    cmp dl, '9'
+    ja .number_done
+    jmp .exponent_digits
+.number_done:
+    mov rdi, rax
+    jmp .delimiter
+.true:
+    lea rax, [rdi + 4]
+    cmp rax, rsi
+    ja .bad_depth
+    cmp byte [rdi + 1], 'r'
+    jne .bad_depth
+    cmp byte [rdi + 2], 'u'
+    jne .bad_depth
+    cmp byte [rdi + 3], 'e'
+    jne .bad_depth
+    mov rdi, rax
+    jmp .delimiter
+.false:
+    lea rax, [rdi + 5]
+    cmp rax, rsi
+    ja .bad_depth
+    cmp byte [rdi + 1], 'a'
+    jne .bad_depth
+    cmp byte [rdi + 2], 'l'
+    jne .bad_depth
+    cmp byte [rdi + 3], 's'
+    jne .bad_depth
+    cmp byte [rdi + 4], 'e'
+    jne .bad_depth
+    mov rdi, rax
+    jmp .delimiter
+.null:
+    lea rax, [rdi + 4]
+    cmp rax, rsi
+    ja .bad_depth
+    cmp byte [rdi + 1], 'u'
+    jne .bad_depth
+    cmp byte [rdi + 2], 'l'
+    jne .bad_depth
+    cmp byte [rdi + 3], 'l'
+    jne .bad_depth
+    mov rdi, rax
+    jmp .delimiter
+.string:
+    call json_direct_string_end
+    jmp .done_depth
+.object:
+    call json_strict_object_end
+    jmp .done_depth
+.array:
+    call json_strict_array_end
+    jmp .done_depth
+.delimiter:
+    cmp rdi, rsi
+    je .scalar_done
+    mov al, [rdi]
+    cmp al, ' '
+    je .scalar_done
+    cmp al, 9
+    je .scalar_done
+    cmp al, 10
+    je .scalar_done
+    cmp al, 13
+    je .scalar_done
+    cmp al, ','
+    je .scalar_done
+    cmp al, '}'
+    je .scalar_done
+    cmp al, ']'
+    je .scalar_done
+    jmp .bad_depth
+.scalar_done:
+    mov rax, rdi
+.done_depth:
+    dec dword [json_strict_depth]
+    pop r10
+    ret
+.bad_depth:
+    dec dword [json_strict_depth]
+.bad:
+    xor eax, eax
+    pop r10
+    ret
+
+; Strict JSON object/array readers used internally by json_direct_value_end.
+json_strict_object_end:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    mov r12, rsi
+    cmp rbx, r12
+    jae .bad
+    cmp byte [rbx], '{'
+    jne .bad
+    inc rbx
+.ws_first:
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], '}'
+    je .close
+.member:
+    cmp byte [rbx], '"'
+    jne .bad
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_string_end
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], ':'
+    jne .bad
+    inc rbx
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_value_end
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], ','
+    je .comma
+    cmp byte [rbx], '}'
+    je .close
+    jmp .bad
+.comma:
+    inc rbx
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], '"'
+    jne .bad
+    jmp .member
+.close:
+    inc rbx
+    mov rax, rbx
+    jmp .out
+.bad:
+    xor eax, eax
+.out:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+json_strict_array_end:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    mov r12, rsi
+    cmp rbx, r12
+    jae .bad
+    cmp byte [rbx], '['
+    jne .bad
+    inc rbx
+.ws_first:
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], ']'
+    je .close
+.value:
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_value_end
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], ','
+    je .comma
+    cmp byte [rbx], ']'
+    je .close
+    jmp .bad
+.comma:
+    inc rbx
+    mov rdi, rbx
+    mov rsi, r12
+    call json_direct_skip_ws
+    test rax, rax
+    jz .bad
+    mov rbx, rax
+    cmp byte [rbx], ']'
+    je .bad
+    jmp .value
+.close:
+    inc rbx
+    mov rax, rbx
+    jmp .out
+.bad:
+    xor eax, eax
+.out:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; RDI=current byte, RSI=exclusive end. RAX=first non-whitespace byte, or zero.
+json_direct_skip_ws:
+    mov rax, rdi
+.loop:
+    cmp rax, rsi
+    jae .none
+    mov dl, [rax]
+    cmp dl, ' '
+    je .advance
+    cmp dl, 9
+    je .advance
+    cmp dl, 10
+    je .advance
+    cmp dl, 13
+    je .advance
+    ret
+.advance:
+    inc rax
+    jmp .loop
+.none:
+    xor eax, eax
+    ret
+
+; RDI=opening quote, RSI=exclusive end. RAX=after closing quote, or zero.
+json_direct_string_end:
+    cmp rdi, rsi
+    jae .bad
+    cmp byte [rdi], '"'
+    jne .bad
+    mov rax, rdi
+    inc rax
+.loop:
+    cmp rax, rsi
+    jae .bad
+    mov dl, [rax]
+    inc rax
+    cmp dl, '"'
+    je .done
+    cmp dl, 0x5c
+    je .escape
+    cmp dl, 0x20
+    jb .bad
+    jmp .loop
+.escape:
+    cmp rax, rsi
+    jae .bad
+    mov dl, [rax]
+    inc rax
+    cmp dl, '"'
+    je .loop
+    cmp dl, 0x5c
+    je .loop
+    cmp dl, '/'
+    je .loop
+    cmp dl, 'b'
+    je .loop
+    cmp dl, 'f'
+    je .loop
+    cmp dl, 'n'
+    je .loop
+    cmp dl, 'r'
+    je .loop
+    cmp dl, 't'
+    je .loop
+    cmp dl, 'u'
+    jne .bad
+    mov r8d, 4
+.unicode:
+    cmp rax, rsi
+    jae .bad
+    mov dl, [rax]
+    cmp dl, '0'
+    jb .unicode_upper
+    cmp dl, '9'
+    jbe .unicode_next
+.unicode_upper:
+    cmp dl, 'A'
+    jb .unicode_lower
+    cmp dl, 'F'
+    jbe .unicode_next
+.unicode_lower:
+    cmp dl, 'a'
+    jb .bad
+    cmp dl, 'f'
+    ja .bad
+.unicode_next:
+    inc rax
+    dec r8d
+    jnz .unicode
+    jmp .loop
+.done:
+    ret
+.bad:
+    xor eax, eax
     ret
 
 ; RDI=JSON bytes, RSI=JSON length, RDX=unquoted ASCII key, ECX=key length.
@@ -512,6 +1132,9 @@ json_value_is_true:
 .no:
     xor eax, eax
     ret
+
+section .bss
+json_strict_depth: resd 1
 
 section .rodata
 hex_lower: db '0123456789abcdef'

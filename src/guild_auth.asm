@@ -11,6 +11,7 @@ global guild_auth_bot_above_member
 global guild_auth_cache_bot_member
 global guild_auth_bot_above_roles
 global guild_auth_get_bot_roles
+global guild_auth_bot_above_role
 global guild_auth_is_owner
 global guild_auth_is_manager
 global guild_auth_roles_have
@@ -1184,6 +1185,53 @@ guild_auth_get_bot_roles:
     xor eax, eax
     xor edx, edx
 .out:
+    pop r13
+    pop r12
+    ret
+
+; RDI=guild, ESI=guild len, RDX=one target role ID, ECX=role len. AL=1
+; only when that role and the bot role cache are complete and bot highest
+; position is strictly above target. Unknown cache/roles fail closed.
+guild_auth_bot_above_role:
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    call guild_auth_role_position
+    test eax, eax
+    js .no
+    mov [rsp], eax
+    mov rdi, r12
+    mov esi, r13d
+    call guild_auth_get_bot_roles
+    test rax, rax
+    jz .no
+    test edx, edx
+    jle .no
+    mov r14, rax
+    mov r15d, edx
+    mov rdi, r12
+    mov esi, r13d
+    mov rdx, r14
+    mov ecx, r15d
+    call guild_auth_member_highest_position
+    test eax, eax
+    js .no
+    cmp eax, [rsp]
+    jle .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    add rsp, 8
+    pop r15
+    pop r14
     pop r13
     pop r12
     ret

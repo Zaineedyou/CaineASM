@@ -15,7 +15,9 @@ extern guild_auth_role_position
 extern guild_auth_member_highest_position
 extern guild_auth_bot_above_member
 extern guild_auth_cache_bot_member
+extern guild_auth_get_bot_roles
 extern guild_auth_bot_above_roles
+extern guild_auth_bot_above_role
 extern guild_auth_is_owner
 extern guild_auth_is_manager
 extern guild_auth_roles_have
@@ -210,6 +212,31 @@ _start:
     lea rdx, [member_roles]
     mov ecx, member_roles_len
     call guild_auth_bot_above_roles
+    test al, al
+    jnz .fail
+
+    ; A single auto-role target uses the same cache and requires bot strictly
+    ; above the target; equal, unknown, or absent cache cannot pass.
+    mov dword [failure_stage], 11
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [role_mod]
+    mov ecx, role_mod_len
+    call guild_auth_bot_above_role
+    test al, al
+    jz .fail
+    lea rdi, [guild_one]
+    mov esi, guild_one_len
+    lea rdx, [role_admin]
+    mov ecx, role_admin_len
+    call guild_auth_bot_above_role
+    test al, al
+    jnz .fail
+    lea rdi, [guild_two]
+    mov esi, guild_two_len
+    lea rdx, [role_mod]
+    mov ecx, role_mod_len
+    call guild_auth_bot_above_role
     test al, al
     jnz .fail
 

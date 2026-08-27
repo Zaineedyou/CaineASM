@@ -2,6 +2,7 @@ BITS 64
 DEFAULT REL
 
 extern json_find_key
+extern json_object_find_direct_key
 extern json_read_uint
 extern json_read_string
 extern json_value_is_true
@@ -166,6 +167,32 @@ _start:
     test rax, rax
     jnz .fail
 
+    mov dword [failure_stage], 10
+    ; Direct lookup accepts the top-level member but cannot be shadowed by a
+    ; nested one and rejects duplicate direct key occurrences.
+    lea rdi, [direct_object]
+    lea rsi, [direct_object + direct_object_len]
+    lea rdx, [key_type]
+    mov ecx, key_type_len
+    call json_object_find_direct_key
+    lea rdx, [direct_object + 8]
+    cmp rax, rdx
+    jne .fail
+    lea rdi, [nested_only_object]
+    lea rsi, [nested_only_object + nested_only_object_len]
+    lea rdx, [key_type]
+    mov ecx, key_type_len
+    call json_object_find_direct_key
+    test rax, rax
+    jnz .fail
+    lea rdi, [duplicate_direct_object]
+    lea rsi, [duplicate_direct_object + duplicate_direct_object_len]
+    lea rdx, [key_type]
+    mov ecx, key_type_len
+    call json_object_find_direct_key
+    test rax, rax
+    jnz .fail
+
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
@@ -206,6 +233,14 @@ key_channel: db 'channel_id'
 key_channel_len equ $ - key_channel
 key_missing: db 'absent'
 key_missing_len equ $ - key_missing
+key_type: db 'type'
+key_type_len equ $ - key_type
+direct_object: db '{"type":2,"nested":{"type":9}}'
+direct_object_len equ $ - direct_object
+nested_only_object: db '{"nested":{"type":9}}'
+nested_only_object_len equ $ - nested_only_object
+duplicate_direct_object: db '{"type":2,"type":3}'
+duplicate_direct_object_len equ $ - duplicate_direct_object
 decoded_content: db 'Hello', 10, 0xe2, 0x98, 0xba, ' ', '"op', '"', ':99'
 decoded_content_len equ $ - decoded_content
 channel_id: db '123456789012345678'
