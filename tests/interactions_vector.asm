@@ -4,6 +4,9 @@ extern interaction_handle_gateway
 
 global _start
 global discord_interaction_respond_text
+global discord_interaction_respond_json
+global bot_owner_ptr
+global bot_owner_len
 
 %define SYS_EXIT 60
 
@@ -35,30 +38,56 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 3
+    lea rax, [dashboard_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_response_len
+    lea rdi, [dashboard_admin_frame]
+    mov esi, dashboard_admin_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 4
+    lea rax, [manager_denied_response]
+    mov [expected_content_ptr], rax
+    mov dword [expected_content_len], manager_denied_response_len
+    lea rdi, [dashboard_denied_frame]
+    mov esi, dashboard_denied_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [callback_calls], 3
+    jne .fail
+    cmp qword [json_callback_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 5
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 2
+    cmp qword [callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 4
+    mov dword [failure_stage], 6
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 2
+    cmp qword [callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 5
+    mov dword [failure_stage], 7
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 2
+    cmp qword [callback_calls], 3
     jne .fail
 
     mov eax, SYS_EXIT
@@ -120,6 +149,37 @@ discord_interaction_respond_text:
     pop rbx
     ret
 
+; RDI=id, ESI=len, RDX=token, ECX=len, R8=response JSON, R9D=len.
+discord_interaction_respond_json:
+    push rbx
+    push r12
+    mov rbx, r8
+    mov r12d, r9d
+    cmp esi, interaction_id_len
+    jne .bad
+    lea rsi, [interaction_id]
+    mov edx, interaction_id_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, [expected_json_len]
+    jne .bad
+    mov rdi, rbx
+    mov rsi, [expected_json_ptr]
+    mov edx, r12d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [json_callback_calls]
+    xor eax, eax
+    jmp .json_out
+.bad:
+    mov eax, -1
+.json_out:
+    pop r12
+    pop rbx
+    ret
+
 ; RDI and RSI buffers, EDX count. AL=1 when exact.
 equal_bytes:
     xor ecx, ecx
@@ -148,6 +208,10 @@ info_frame_len equ $ - info_frame
 help_frame: db '{"op":0,"s":2,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"data":{"id":"2","name":"help","type":1}}}'
 help_frame_len equ $ - help_frame
 unknown_frame: db '{"op":0,"s":3,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"data":{"id":"3","name":"other","type":1}}}'
+dashboard_admin_frame: db '{"op":0,"s":3,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"id":"3","name":"dashboard","type":1}}}'
+dashboard_admin_frame_len equ $ - dashboard_admin_frame
+dashboard_denied_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"guild_id":"1","member":{"permissions":"0","user":{"id":"member-1"}},"data":{"id":"4","name":"dashboard","type":1}}}'
+dashboard_denied_frame_len equ $ - dashboard_denied_frame
 unknown_frame_len equ $ - unknown_frame
 wrong_type_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":4,"data":{"id":"4","name":"info","type":1}}}'
 wrong_type_frame_len equ $ - wrong_type_frame
@@ -157,9 +221,18 @@ info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llam
 info_response_len equ $ - info_response
 help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
 help_response_len equ $ - help_response
+manager_denied_response: db 'Khusus admin atau bot owner.'
+manager_denied_response_len equ $ - manager_denied_response
+dashboard_response: db '{"type":4,"data":{"flags":64,"embeds":[{"color":5793266,"title":"Dashboard Bot Caine","description":"Pilih menu di bawah:"}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"General","custom_id":"dash_general"},{"type":2,"style":3,"label":"Welcome/Goodbye","custom_id":"dash_welcome"},{"type":2,"style":2,"label":"Auto-role","custom_id":"dash_autorole"},{"type":2,"style":2,"label":"Leveling","custom_id":"dash_leveling"}]},{"type":1,"components":[{"type":2,"style":1,"label":"Persona","custom_id":"dash_persona"},{"type":2,"style":1,"label":"Model AI","custom_id":"dash_model"},{"type":2,"style":4,"label":"Moderation","custom_id":"dash_moderation"},{"type":2,"style":1,"label":"Status Bot","custom_id":"dash_status"}]}]}}'
+dashboard_response_len equ $ - dashboard_response
 
 section .data
 callback_calls: dq 0
+json_callback_calls: dq 0
+bot_owner_ptr: dq 0
+bot_owner_len: dd 0
+expected_json_ptr: dq 0
+expected_json_len: dd 0
 expected_content_ptr: dq 0
 expected_content_len: dd 0
 failure_stage: dd 0
