@@ -118,6 +118,60 @@ _start:
     mov byte [welcome_dashboard_mode], 0
 
     mov dword [failure_stage], 8
+    mov byte [autorole_dashboard_mode], 1
+    lea rax, [dashboard_autorole_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_autorole_dynamic_response_len
+    lea rdi, [dashboard_autorole_frame]
+    mov esi, dashboard_autorole_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 6
+    jne .fail
+
+    mov dword [failure_stage], 9
+    mov byte [autorole_dashboard_mode], 2
+    lea rax, [dashboard_autorole_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_autorole_fallback_response_len
+    lea rdi, [dashboard_autorole_frame]
+    mov esi, dashboard_autorole_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 7
+    jne .fail
+    mov byte [autorole_dashboard_mode], 0
+
+    mov dword [failure_stage], 10
+    mov byte [leveling_dashboard_mode], 1
+    lea rax, [dashboard_leveling_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_leveling_dynamic_response_len
+    lea rdi, [dashboard_leveling_frame]
+    mov esi, dashboard_leveling_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 8
+    jne .fail
+
+    mov dword [failure_stage], 11
+    mov byte [leveling_dashboard_mode], 2
+    lea rax, [dashboard_leveling_fallback_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_leveling_fallback_response_len
+    lea rdi, [dashboard_leveling_frame]
+    mov esi, dashboard_leveling_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 9
+    jne .fail
+    mov byte [leveling_dashboard_mode], 0
+
+    mov dword [failure_stage], 12
     lea rax, [dashboard_model_response]
     mov [expected_json_ptr], rax
     mov dword [expected_json_len], dashboard_model_response_len
@@ -126,10 +180,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 6
+    cmp qword [json_callback_calls], 10
     jne .fail
 
-    mov dword [failure_stage], 9
+    mov dword [failure_stage], 13
     lea rax, [model_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], model_guild_id_len
@@ -212,7 +266,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 7
+    cmp qword [json_callback_calls], 11
     jne .fail
 
     mov dword [failure_stage], 13
@@ -489,7 +543,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 8
+    cmp qword [json_callback_calls], 12
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -519,7 +573,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 9
+    cmp qword [json_callback_calls], 13
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -535,7 +589,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 10
+    cmp qword [json_callback_calls], 14
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -568,7 +622,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 10
+    cmp qword [json_callback_calls], 14
     jne .fail
 
     mov dword [failure_stage], 31
@@ -627,6 +681,46 @@ guild_config_get:
     push r12
     mov rbx, rdx
     mov r12d, ecx
+    cmp byte [autorole_dashboard_mode], 0
+    je .check_leveling
+    cmp r12d, setting_autorole_len
+    jne .none
+    mov rdi, rbx
+    lea rsi, [setting_autorole]
+    mov edx, setting_autorole_len
+    call equal_bytes
+    test al, al
+    jz .none
+    cmp byte [autorole_dashboard_mode], 1
+    jne .autorole_fallback
+    lea rax, [autorole_id]
+    mov edx, autorole_id_len
+    jmp .out
+.autorole_fallback:
+    lea rax, [invalid_channel_id]
+    mov edx, invalid_channel_id_len
+    jmp .out
+.check_leveling:
+    cmp byte [leveling_dashboard_mode], 0
+    je .check_welcome_mode
+    cmp r12d, setting_level_channel_len
+    jne .none
+    mov rdi, rbx
+    lea rsi, [setting_level_channel]
+    mov edx, setting_level_channel_len
+    call equal_bytes
+    test al, al
+    jz .none
+    cmp byte [leveling_dashboard_mode], 1
+    jne .leveling_fallback
+    lea rax, [level_channel_id]
+    mov edx, level_channel_id_len
+    jmp .out
+.leveling_fallback:
+    lea rax, [invalid_channel_id]
+    mov edx, invalid_channel_id_len
+    jmp .out
+.check_welcome_mode:
     cmp byte [welcome_dashboard_mode], 0
     je .not_welcome
     cmp r12d, setting_welcome_channel_len
@@ -999,6 +1093,12 @@ discord_interaction_respond_json:
     xor eax, eax
     jmp .json_out
 .bad:
+    ; Temporary diagnostic for the active type-7 fixture mismatch.
+    mov edi, 1
+    mov rsi, rbx
+    mov edx, r12d
+    mov eax, 1
+    syscall
     mov eax, -1
 .json_out:
     pop r12
@@ -1043,6 +1143,10 @@ dashboard_general_frame: db '{"op":0,"s":6,"t":"INTERACTION_CREATE","d":{"id":"1
 dashboard_general_frame_len equ $ - dashboard_general_frame
 dashboard_welcome_frame: db '{"op":0,"s":7,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_welcome","component_type":2}}}'
 dashboard_welcome_frame_len equ $ - dashboard_welcome_frame
+dashboard_autorole_frame: db '{"op":0,"s":28,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_autorole","component_type":2}}}'
+dashboard_autorole_frame_len equ $ - dashboard_autorole_frame
+dashboard_leveling_frame: db '{"op":0,"s":29,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_leveling","component_type":2}}}'
+dashboard_leveling_frame_len equ $ - dashboard_leveling_frame
 dashboard_model_frame: db '{"op":0,"s":8,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model","component_type":2}}}'
 dashboard_model_frame_len equ $ - dashboard_model_frame
 dashboard_model_llama_frame: db '{"op":0,"s":9,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_llama70b","component_type":2}}}'
@@ -1108,6 +1212,14 @@ dashboard_welcome_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{
 dashboard_welcome_dynamic_response_len equ $ - dashboard_welcome_dynamic_response
 dashboard_welcome_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","fields":[{"name":"Welcome Channel","value":"Belum diset"},{"name":"Welcome Message","value":"`Selamat datang {user} di **{server}**!`"},{"name":"Goodbye Channel","value":"Belum diset"},{"name":"Goodbye Message","value":"`Selamat tinggal **{username}** dari **{server}**.`"},{"name":"Variabel","value":"`{user}` `{username}` `{server}` `{count}`"}]}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_welcome_fallback_response_len equ $ - dashboard_welcome_fallback_response
+dashboard_autorole_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16753920,"title":"Auto-role","fields":[{"name":"Role Saat Join","value":"<@&444444444444444444>"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Auto-role","custom_id":"dash_setautorole"},{"type":2,"style":4,"label":"Hapus Auto-role","custom_id":"dash_removeautorole"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_autorole_dynamic_response_len equ $ - dashboard_autorole_dynamic_response
+dashboard_autorole_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16753920,"title":"Auto-role","fields":[{"name":"Role Saat Join","value":"Belum diset"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Auto-role","custom_id":"dash_setautorole"},{"type":2,"style":4,"label":"Hapus Auto-role","custom_id":"dash_removeautorole"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_autorole_fallback_response_len equ $ - dashboard_autorole_fallback_response
+dashboard_leveling_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16766720,"title":"Leveling","fields":[{"name":"Level-up Channel","value":"<#333333333333333333>"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Level Channel","custom_id":"dash_setlevelchannel"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_leveling_dynamic_response_len equ $ - dashboard_leveling_dynamic_response
+dashboard_leveling_fallback_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16766720,"title":"Leveling","fields":[{"name":"Level-up Channel","value":"(notif di channel chat)"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Level Channel","custom_id":"dash_setlevelchannel"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_leveling_fallback_response_len equ $ - dashboard_leveling_fallback_response
 dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
@@ -1237,6 +1349,8 @@ health_permission_allowed: db 1
 status_history_mode: db 0
 general_log_mode: db 0
 welcome_dashboard_mode: db 0
+autorole_dashboard_mode: db 0
+leveling_dashboard_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18

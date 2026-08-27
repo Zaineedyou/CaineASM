@@ -482,8 +482,11 @@ interaction_handle_gateway:
     mov r9d, modal_setautorole_response_len
     jmp .component_respond_json
 .component_autorole:
-    lea r8, [dashboard_autorole_response]
-    mov r9d, dashboard_autorole_response_len
+    call interaction_build_autorole_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_autorole_dynamic]
     jmp .component_respond_json
 .component_removeword:
     lea r8, [modal_removeword_response]
@@ -532,8 +535,11 @@ interaction_handle_gateway:
     mov r9d, modal_setlevelchannel_response_len
     jmp .component_respond_json
 .component_leveling:
-    lea r8, [dashboard_leveling_response]
-    mov r9d, dashboard_leveling_response_len
+    call interaction_build_leveling_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_leveling_dynamic]
     jmp .component_respond_json
 .component_model:
     lea r8, [dashboard_model_response]
@@ -1057,6 +1063,176 @@ interaction_build_status_response:
     mov edx, dashboard_status_suffix_len
     call interaction_copy_bytes
     mov byte [dashboard_status_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 Auto-role response. The role mention is constructed only from
+; a nonzero decimal ID. RAX=response length or -1 when the fixed buffer is full.
+interaction_build_autorole_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [dashboard_unset]
+    mov r15d, dashboard_unset_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_autorole]
+    mov ecx, setting_autorole_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call decimal_id_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, dashboard_autorole_prefix_len
+    cmp r12, dashboard_unset
+    je .unset_length
+    add eax, dashboard_role_mention_prefix_len
+    add eax, r15d
+    add eax, dashboard_role_mention_suffix_len
+    jmp .after_value
+.unset_length:
+    add eax, r15d
+.after_value:
+    add eax, dashboard_autorole_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_autorole_dynamic]
+    lea rsi, [dashboard_autorole_prefix]
+    mov edx, dashboard_autorole_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_autorole_dynamic + dashboard_autorole_prefix_len]
+    cmp r12, dashboard_unset
+    je .copy_unset
+    lea rsi, [dashboard_role_mention_prefix]
+    mov edx, dashboard_role_mention_prefix_len
+    call interaction_copy_bytes
+    add rdi, dashboard_role_mention_prefix_len
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    add rdi, r15
+    lea rsi, [dashboard_role_mention_suffix]
+    mov edx, dashboard_role_mention_suffix_len
+    call interaction_copy_bytes
+    add rdi, dashboard_role_mention_suffix_len
+    jmp .suffix
+.copy_unset:
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    add rdi, r15
+.suffix:
+    lea rsi, [dashboard_autorole_suffix]
+    mov edx, dashboard_autorole_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_autorole_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 Leveling response. The channel mention is constructed only
+; from a nonzero decimal ID. RAX=response length or -1 on a bounded overflow.
+interaction_build_leveling_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [level_channel_unset]
+    mov r15d, level_channel_unset_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_level_channel]
+    mov ecx, setting_level_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call decimal_id_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, dashboard_leveling_prefix_len
+    cmp r12, level_channel_unset
+    je .unset_length
+    add eax, dashboard_channel_mention_prefix_len
+    add eax, r15d
+    add eax, dashboard_channel_mention_suffix_len
+    jmp .after_value
+.unset_length:
+    add eax, r15d
+.after_value:
+    add eax, dashboard_leveling_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_leveling_dynamic]
+    lea rsi, [dashboard_leveling_prefix]
+    mov edx, dashboard_leveling_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_leveling_dynamic + dashboard_leveling_prefix_len]
+    cmp r12, level_channel_unset
+    je .copy_unset
+    lea rsi, [dashboard_channel_mention_prefix]
+    mov edx, dashboard_channel_mention_prefix_len
+    call interaction_copy_bytes
+    add rdi, dashboard_channel_mention_prefix_len
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    add rdi, r15
+    lea rsi, [dashboard_channel_mention_suffix]
+    mov edx, dashboard_channel_mention_suffix_len
+    call interaction_copy_bytes
+    add rdi, dashboard_channel_mention_suffix_len
+    jmp .suffix
+.copy_unset:
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    add rdi, r15
+.suffix:
+    lea rsi, [dashboard_leveling_suffix]
+    mov edx, dashboard_leveling_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_leveling_dynamic + rbx], 0
     mov eax, ebx
     jmp .out
 .bad:
@@ -2489,6 +2665,26 @@ health_probe_value: db 'cache_ping'
 health_probe_value_len equ $ - health_probe_value
 general_log_unset: db 'Belum diset'
 general_log_unset_len equ $ - general_log_unset
+dashboard_unset: db 'Belum diset'
+dashboard_unset_len equ $ - dashboard_unset
+level_channel_unset: db '(notif di channel chat)'
+level_channel_unset_len equ $ - level_channel_unset
+dashboard_autorole_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16753920,"title":"Auto-role","fields":[{"name":"Role Saat Join","value":"'
+dashboard_autorole_prefix_len equ $ - dashboard_autorole_prefix
+dashboard_autorole_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Auto-role","custom_id":"dash_setautorole"},{"type":2,"style":4,"label":"Hapus Auto-role","custom_id":"dash_removeautorole"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_autorole_suffix_len equ $ - dashboard_autorole_suffix
+dashboard_role_mention_prefix: db '<@&'
+dashboard_role_mention_prefix_len equ $ - dashboard_role_mention_prefix
+dashboard_role_mention_suffix: db '>'
+dashboard_role_mention_suffix_len equ $ - dashboard_role_mention_suffix
+dashboard_leveling_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":16766720,"title":"Leveling","fields":[{"name":"Level-up Channel","value":"'
+dashboard_leveling_prefix_len equ $ - dashboard_leveling_prefix
+dashboard_leveling_suffix: db '"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Level Channel","custom_id":"dash_setlevelchannel"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_leveling_suffix_len equ $ - dashboard_leveling_suffix
+dashboard_channel_mention_prefix: db '<#'
+dashboard_channel_mention_prefix_len equ $ - dashboard_channel_mention_prefix
+dashboard_channel_mention_suffix: db '>'
+dashboard_channel_mention_suffix_len equ $ - dashboard_channel_mention_suffix
 welcome_channel_unset: db 'Belum diset'
 welcome_channel_unset_len equ $ - welcome_channel_unset
 default_welcome_template: db 'Selamat datang {user} di **{server}**!'
@@ -2622,3 +2818,5 @@ health_probe_reply: resb 1901
 dashboard_status_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_general_dynamic: resb DASHBOARD_DYNAMIC_CAP
 dashboard_welcome_dynamic: resb DASHBOARD_WELCOME_DYNAMIC_CAP
+dashboard_autorole_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_leveling_dynamic: resb DASHBOARD_DYNAMIC_CAP
