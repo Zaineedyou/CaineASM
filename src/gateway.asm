@@ -1446,7 +1446,7 @@ event_interaction_create: db 'INTERACTION_CREATE'
 event_interaction_create_len equ $ - event_interaction_create
 identify_prefix: db '{"op":2,"d":{"token":"'
 identify_prefix_len equ $ - identify_prefix
-identify_suffix: db '","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"}}}'
+identify_suffix: db '","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"},"presence":{"since":0,"activities":[{"name":"Custom Status","type":4,"state":"Property Of Caineedyou | Developed By Zaineedyou"}],"status":"online","afk":false}}}'
 identify_suffix_len equ $ - identify_suffix
 resume_prefix: db '{"op":6,"d":{"token":"'
 resume_prefix_len equ $ - resume_prefix

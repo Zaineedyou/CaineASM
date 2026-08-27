@@ -557,7 +557,7 @@ member_add_frame: db '{"op":0,"s":45,"t":"GUILD_MEMBER_ADD","d":{"guild_id":"100
 member_add_frame_len equ $ - member_add_frame
 member_remove_frame: db '{"op":0,"s":46,"t":"GUILD_MEMBER_REMOVE","d":{"guild_id":"1001","user":{"id":"2001","username":"Alice"}}}'
 member_remove_frame_len equ $ - member_remove_frame
-identify_payload: db '{"op":2,"d":{"token":"token-value","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"}}}'
+identify_payload: db '{"op":2,"d":{"token":"token-value","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"},"presence":{"since":0,"activities":[{"name":"Custom Status","type":4,"state":"Property Of Caineedyou | Developed By Zaineedyou"}],"status":"online","afk":false}}}'
 identify_payload_len equ $ - identify_payload
 heartbeat_payload: db '{"op":1,"d":42}'
 heartbeat_payload_len equ $ - heartbeat_payload
