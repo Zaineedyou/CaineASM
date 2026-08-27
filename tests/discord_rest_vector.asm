@@ -7,6 +7,7 @@ extern discord_get_json
 extern discord_get_channel_messages
 extern discord_bulk_delete_messages
 extern discord_interaction_respond_text
+extern discord_interaction_respond_json
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -710,6 +711,36 @@ _start:
     cmp qword [unauth_calls], 2
     jne .fail
 
+    mov dword [failure_stage], 93
+    lea rax, [raw_interaction_body]
+    mov [expected_unauth_body_ptr], rax
+    mov dword [expected_unauth_body_len], raw_interaction_body_len
+    mov qword [unauth_status], 204
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_token]
+    mov ecx, interaction_token_len
+    lea r8, [raw_interaction_body]
+    mov r9d, raw_interaction_body_len
+    call discord_interaction_respond_json
+    test eax, eax
+    jnz .fail
+    cmp qword [unauth_calls], 3
+    jne .fail
+
+    mov dword [failure_stage], 94
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_token]
+    mov ecx, interaction_token_len
+    lea r8, [raw_interaction_body_bad]
+    mov r9d, raw_interaction_body_bad_len
+    call discord_interaction_respond_json
+    cmp eax, -1
+    jne .fail
+    cmp qword [unauth_calls], 3
+    jne .fail
+
     mov dword [failure_stage], 10
     mov qword [put_status], 204
     lea rdi, [channel_id]
@@ -1290,6 +1321,10 @@ expected_interaction_url: db 'https://discord.com/api/v10/interactions/112233445
 expected_interaction_url_len equ $ - expected_interaction_url
 expected_interaction_body: db '{"type":4,"data":{"content":"Hi \"Caine\"","flags":64,"allowed_mentions":{"parse":[]}}}'
 expected_interaction_body_len equ $ - expected_interaction_body
+raw_interaction_body: db '{"type":7}'
+raw_interaction_body_len equ $ - raw_interaction_body
+raw_interaction_body_bad: db '{"type":7'
+raw_interaction_body_bad_len equ $ - raw_interaction_body_bad
 message_id: db '987654321098765432'
 message_id_len equ $ - message_id
 role_id: db '111222333444555666'

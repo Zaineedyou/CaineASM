@@ -7,6 +7,7 @@ global discord_get_json
 global discord_get_channel_messages
 global discord_bulk_delete_messages
 global discord_interaction_respond_text
+global discord_interaction_respond_json
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -30,6 +31,7 @@ extern secure_https_put_json
 extern secure_https_put_json_with_header
 extern secure_https_patch_json
 extern json_escape_append
+extern json_object_end
 extern discord_token_ptr
 extern discord_token_len
 
@@ -242,6 +244,114 @@ discord_get_json:
 ; ECX=count (2..100). EAX=0 only after an authenticated HTTP 2xx POST.
 ; Every slot must be a non-empty decimal ID and all IDs must be unique. The
 ; application payload is constructed here, not in the C transport boundary.
+; RDI=interaction ID, ESI=ID len, RDX=interaction token, ECX=token len,
+; R8=complete response JSON object, R9D=len. EAX=0 only after callback HTTP
+; 2xx. The payload is application-owned NASM data and must be exactly one
+; bounded JSON object; token bytes are never logged or persisted.
+discord_interaction_respond_json:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    test r12, r12
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r8, r8
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, INTERACTION_ID_CAP - 1
+    ja .bad
+    test r15d, r15d
+    jle .bad
+    cmp r15d, INTERACTION_TOKEN_CAP - 1
+    ja .bad
+    test r9d, r9d
+    jle .bad
+    cmp r9d, INTERACTION_BODY_CAP - 1
+    ja .bad
+    mov rbx, r8
+    mov dword [interaction_body_len], r9d
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call validate_interaction_token
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    lea rsi, [rbx + r9]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    lea rdx, [rbx + r9]
+    cmp rax, rdx
+    jne .bad
+    mov eax, interaction_callback_prefix_len
+    add eax, r13d
+    add eax, 1
+    add eax, r15d
+    add eax, interaction_callback_suffix_len
+    cmp eax, INTERACTION_URL_CAP - 1
+    ja .bad
+    lea rdi, [interaction_url]
+    lea rsi, [interaction_callback_prefix]
+    mov edx, interaction_callback_prefix_len
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_callback_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_callback_prefix_len]
+    add rdi, r13
+    mov byte [rdi], '/'
+    inc rdi
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    add rdi, r15
+    lea rsi, [interaction_callback_suffix]
+    mov edx, interaction_callback_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    mov byte [rdi], 0
+    lea rdi, [interaction_url]
+    mov rsi, rbx
+    mov edx, [interaction_body_len]
+    lea rcx, [response_body]
+    mov r8d, RESPONSE_BODY_CAP
+    lea r9, [response_status]
+    call secure_https_post_json_unauth
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; RDI=interaction ID, ESI=ID len, RDX=interaction token, ECX=token len,
 ; R8=content, R9D=content len, RAX=flags. EAX=0 only after callback HTTP
 ; 2xx. The one-time interaction token is never logged or persisted.
