@@ -170,6 +170,43 @@ long secure_https_post_json_unauth(const char *url, const char *body,
     return (long)output.length;
 }
 
+long secure_https_patch_json_unauth(const char *url, const char *body,
+                                    size_t body_length, char *response,
+                                    size_t response_capacity, long *status_out) {
+    CURL *easy = curl_easy_init();
+    struct curl_slist *headers = NULL;
+    struct response_buffer output = {response, response_capacity, 0};
+    CURLcode code;
+    long status = 0;
+    if (!easy || !url || !body || !response || response_capacity < 2) return -EINVAL;
+
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    if (!headers) {
+        curl_easy_cleanup(easy);
+        return -ENOMEM;
+    }
+    curl_easy_setopt(easy, CURLOPT_URL, url);
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "PATCH");
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body_length);
+    curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, 30000L);
+    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, receive_body);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, &output);
+    code = curl_easy_perform(easy);
+    curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(easy);
+    if (status_out) *status_out = status;
+    if (code != CURLE_OK) {
+        set_error("interaction response edit", code);
+        return -(long)code;
+    }
+    return (long)output.length;
+}
+
 long secure_https_delete(const char *url, const char *authorization,
                          char *response, size_t response_capacity,
                          long *status_out) {

@@ -8,6 +8,7 @@ global discord_get_channel_messages
 global discord_bulk_delete_messages
 global discord_interaction_respond_text
 global discord_interaction_respond_json
+global discord_interaction_edit_original
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -23,6 +24,7 @@ global discord_remove_member_role
 
 extern secure_https_post_json
 extern secure_https_post_json_unauth
+extern secure_https_patch_json_unauth
 extern secure_https_delete
 extern secure_https_delete_with_header
 extern secure_https_get
@@ -332,6 +334,116 @@ discord_interaction_respond_json:
     mov r8d, RESPONSE_BODY_CAP
     lea r9, [response_status]
     call secure_https_post_json_unauth
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=application ID, ESI=ID len, RDX=interaction token, ECX=token len,
+; R8=complete replacement JSON, R9D=len. EAX=0 only after bounded HTTPS PATCH
+; to the original interaction response. Application routing remains in NASM;
+; the token is neither logged nor persisted.
+discord_interaction_edit_original:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov rbx, r8
+    test r12, r12
+    jz .bad
+    test r14, r14
+    jz .bad
+    test rbx, rbx
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, INTERACTION_ID_CAP - 1
+    ja .bad
+    test r15d, r15d
+    jle .bad
+    cmp r15d, INTERACTION_TOKEN_CAP - 1
+    ja .bad
+    test r9d, r9d
+    jle .bad
+    cmp r9d, INTERACTION_BODY_CAP - 1
+    ja .bad
+    mov [interaction_body_len], r9d
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call validate_interaction_token
+    test al, al
+    jz .bad
+    mov rdi, rbx
+    mov esi, [interaction_body_len]
+    lea rsi, [rbx + rsi]
+    call json_object_end
+    test rax, rax
+    jz .bad
+    mov edx, [interaction_body_len]
+    lea rdi, [rbx + rdx]
+    cmp rax, rdi
+    jne .bad
+    mov eax, interaction_webhook_prefix_len
+    add eax, r13d
+    add eax, 1
+    add eax, r15d
+    add eax, interaction_original_suffix_len
+    cmp eax, INTERACTION_URL_CAP - 1
+    ja .bad
+    lea rdi, [interaction_url]
+    lea rsi, [interaction_webhook_prefix]
+    mov edx, interaction_webhook_prefix_len
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_webhook_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_webhook_prefix_len]
+    add rdi, r13
+    mov byte [rdi], '/'
+    inc rdi
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    add rdi, r15
+    lea rsi, [interaction_original_suffix]
+    mov edx, interaction_original_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    mov byte [rdi], 0
+    lea rdi, [interaction_url]
+    mov rsi, rbx
+    mov edx, [interaction_body_len]
+    lea rcx, [response_body]
+    mov r8d, RESPONSE_BODY_CAP
+    lea r9, [response_status]
+    call secure_https_patch_json_unauth
     test rax, rax
     js .bad
     mov rax, [response_status]
@@ -2429,6 +2541,10 @@ interaction_callback_prefix: db 'https://discord.com/api/v10/interactions/'
 interaction_callback_prefix_len equ $ - interaction_callback_prefix
 interaction_callback_suffix: db '/callback'
 interaction_callback_suffix_len equ $ - interaction_callback_suffix
+interaction_webhook_prefix: db 'https://discord.com/api/v10/webhooks/'
+interaction_webhook_prefix_len equ $ - interaction_webhook_prefix
+interaction_original_suffix: db '/messages/@original'
+interaction_original_suffix_len equ $ - interaction_original_suffix
 interaction_body_prefix: db '{"type":4,"data":{"content":"'
 interaction_body_prefix_len equ $ - interaction_body_prefix
 interaction_body_suffix: db '","flags":64,"allowed_mentions":{"parse":[]}}}'
