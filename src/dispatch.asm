@@ -61,6 +61,7 @@ extern warnings_get
 extern warnings_clear
 extern bot_prefix_ptr
 extern bot_prefix_len
+extern message_rate_allow
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
 extern gateway_guild_count
@@ -260,6 +261,13 @@ dispatch_message_create:
     mov [author_name_len], eax
     mov byte [author_name + rax], 0
 .author_name_done:
+    cmp dword [author_id_len], 0
+    jle .handled
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+    call message_rate_allow
+    test al, al
+    jz .handled
     cmp dword [guild_id_len], 0
     je .content
     lea rdi, [guild_id]

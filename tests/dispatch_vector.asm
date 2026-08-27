@@ -16,6 +16,7 @@ global groq_select_guild
 global groq_select_history
 global history_clear
 global ai_rate_allow
+global message_rate_allow
 global afk_set
 global xp_increment
 global xp_get
@@ -90,6 +91,7 @@ _start:
     mov dword [vision_mode], VISION_NONE
     mov dword [vision_sequence], 0
     mov byte [rate_allowed], 1
+    mov byte [message_rate_allowed], 1
     mov dword [reply_mode], REPLY_NONE
     mov dword [clear_snapshot_mode], CLEAR_SNAPSHOT_NONE
     mov qword [clear_get_calls], 0
@@ -1606,6 +1608,17 @@ _start:
     cmp qword [send_calls], 81
     jne .fail
 
+    mov dword [failure_stage], 79
+    mov byte [message_rate_allowed], 0
+    lea rdi, [rate_limited_event]
+    mov esi, rate_limited_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 81
+    jne .fail
+    mov byte [message_rate_allowed], 1
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -1636,6 +1649,11 @@ history_clear:
 ai_rate_allow:
     inc qword [rate_allow_calls]
     mov al, [rate_allowed]
+    ret
+
+message_rate_allow:
+    inc qword [message_rate_calls]
+    mov al, [message_rate_allowed]
     ret
 
 ; RDI=destination, ESI=capacity. EAX=bytes written.
@@ -2804,6 +2822,8 @@ status_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"12345678901234
 status_event_len equ $ - status_event
 reset_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^reset","author":{"id":"user-2","bot":false}}}'
 reset_event_len equ $ - reset_event
+rate_limited_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^help","author":{"id":"rate-user","bot":false}}}'
+rate_limited_event_len equ $ - rate_limited_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^rank","author":{"id":"user-2","bot":false}}}'
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
@@ -3168,7 +3188,9 @@ failure_stage: dd 0
 vision_mode: dd VISION_NONE
 vision_sequence: dd 0
 rate_allowed: db 1
+message_rate_allowed: db 1
 rate_allow_calls: dq 0
+message_rate_calls: dq 0
 vision_calls: dq 0
 expected_vision_ptr: dq 0
 expected_vision_len: dd 0
