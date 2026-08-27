@@ -12,6 +12,16 @@ global guild_config_delete
 global guild_word_add
 global guild_word_remove
 global guild_auth_bot_above_role
+global guild_auth_get_bot_roles
+global guild_auth_roles_have
+global guild_config_get
+global groq_select_guild
+global groq_select_history
+global groq_chat_once
+global discord_interaction_edit_original
+global gateway_bot_user_id
+global gateway_bot_user_id_len
+global gateway_last_heartbeat_latency_ms
 
 %define SYS_EXIT 60
 
@@ -355,6 +365,9 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 21
+    lea rax, [setting_persona]
+    mov [expected_delete_setting_ptr], rax
+    mov dword [expected_delete_setting_len], setting_persona_len
     lea rax, [persona_reset_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], persona_reset_response_len
@@ -436,6 +449,84 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 26
+    lea rax, [healthcheck_deferred_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], healthcheck_deferred_response_len
+    lea rax, [health_probe_setting]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], health_probe_setting_len
+    mov [expected_delete_setting_ptr], rax
+    mov dword [expected_delete_setting_len], health_probe_setting_len
+    lea rax, [health_probe_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], health_probe_value_len
+    lea rax, [healthcheck_ok_edit]
+    mov [expected_health_edit_ptr], rax
+    mov dword [expected_health_edit_len], healthcheck_ok_edit_len
+    lea rdi, [healthcheck_frame]
+    mov esi, healthcheck_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [config_set_calls], 14
+    jne .fail
+    cmp qword [config_delete_calls], 2
+    jne .fail
+    cmp qword [json_callback_calls], 7
+    jne .fail
+    cmp qword [health_edit_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 27
+    mov byte [health_permission_allowed], 0
+    lea rax, [healthcheck_deferred_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], healthcheck_deferred_response_len
+    lea rax, [health_probe_setting]
+    mov [expected_config_setting_ptr], rax
+    mov dword [expected_config_setting_len], health_probe_setting_len
+    mov [expected_delete_setting_ptr], rax
+    mov dword [expected_delete_setting_len], health_probe_setting_len
+    lea rax, [health_probe_value]
+    mov [expected_config_value_ptr], rax
+    mov dword [expected_config_value_len], health_probe_value_len
+    lea rax, [healthcheck_degraded_edit]
+    mov [expected_health_edit_ptr], rax
+    mov dword [expected_health_edit_len], healthcheck_degraded_edit_len
+    lea rdi, [healthcheck_frame]
+    mov esi, healthcheck_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [config_set_calls], 15
+    jne .fail
+    cmp qword [config_delete_calls], 3
+    jne .fail
+    cmp qword [json_callback_calls], 8
+    jne .fail
+    cmp qword [health_edit_calls], 2
+    jne .fail
+    mov byte [health_permission_allowed], 1
+
+    mov dword [failure_stage], 28
+    lea rax, [manager_denied_response]
+    mov [expected_content_ptr], rax
+    mov dword [expected_content_len], manager_denied_response_len
+    lea rdi, [healthcheck_denied_frame]
+    mov esi, healthcheck_denied_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [config_set_calls], 15
+    jne .fail
+    cmp qword [config_delete_calls], 3
+    jne .fail
+    cmp qword [health_edit_calls], 2
+    jne .fail
+    cmp qword [callback_calls], 20
+    jne .fail
+
+    mov dword [failure_stage], 29
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], manager_denied_response_len
@@ -444,12 +535,12 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 20
+    cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 6
+    cmp qword [json_callback_calls], 8
     jne .fail
 
-    mov dword [failure_stage], 27
+    mov dword [failure_stage], 30
     lea rax, [config_failure_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], config_failure_response_len
@@ -458,36 +549,36 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [config_set_calls], 13
+    cmp qword [config_set_calls], 15
     jne .fail
-    cmp qword [callback_calls], 21
+    cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 28
+    mov dword [failure_stage], 31
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 21
+    cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 29
+    mov dword [failure_stage], 32
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 21
+    cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 30
+    mov dword [failure_stage], 33
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [callback_calls], 21
+    cmp qword [callback_calls], 22
     jne .fail
 
     mov eax, SYS_EXIT
@@ -497,6 +588,82 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; Bounded healthcheck seams: no network and no durable store are accessed by
+; this vector. Dedicated cases below can control their success bits.
+guild_config_get:
+    lea rax, [health_probe_value]
+    mov edx, health_probe_value_len
+    ret
+
+groq_select_guild:
+    xor eax, eax
+    ret
+
+groq_select_history:
+    xor eax, eax
+    ret
+
+groq_chat_once:
+    mov byte [rdx], 0
+    xor eax, eax
+    ret
+
+guild_auth_get_bot_roles:
+    lea rax, [health_bot_roles]
+    mov edx, health_bot_roles_len
+    ret
+
+guild_auth_roles_have:
+    mov al, [health_permission_allowed]
+    ret
+
+discord_interaction_edit_original:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov rbx, r8
+    mov r12d, r9d
+    mov r13, rdx
+    mov r14d, ecx
+    cmp esi, [gateway_bot_user_id_len]
+    jne .bad
+    lea rsi, [gateway_bot_user_id]
+    mov edx, [gateway_bot_user_id_len]
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r14d, interaction_token_len
+    jne .bad
+    mov rdi, r13
+    lea rsi, [interaction_token]
+    mov edx, interaction_token_len
+    call equal_bytes
+    test al, al
+    jz .bad
+    cmp r12d, [expected_health_edit_len]
+    jne .bad
+    mov rdi, rbx
+    mov rsi, [expected_health_edit_ptr]
+    mov edx, [expected_health_edit_len]
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [health_edit_calls]
+    xor eax, eax
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 
 ; RDI=guild, ESI=guild len, RDX=role, ECX=role len. The default test seam
 ; fails closed unless a later auto-role case explicitly authorizes it.
@@ -568,11 +735,11 @@ guild_config_delete:
     call equal_bytes
     test al, al
     jz .bad
-    cmp r12d, setting_persona_len
+    cmp r12d, [expected_delete_setting_len]
     jne .bad
     mov rdi, rbx
-    lea rsi, [setting_persona]
-    mov edx, setting_persona_len
+    mov rsi, [expected_delete_setting_ptr]
+    mov edx, [expected_delete_setting_len]
     call equal_bytes
     test al, al
     jz .bad
@@ -790,6 +957,10 @@ modal_setautorole_submit_frame: db '{"op":0,"s":24,"t":"INTERACTION_CREATE","d":
 modal_setautorole_submit_frame_len equ $ - modal_setautorole_submit_frame
 dashboard_resetpersona_frame: db '{"op":0,"s":21,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_resetpersona","component_type":2}}}'
 dashboard_resetpersona_frame_len equ $ - dashboard_resetpersona_frame
+healthcheck_frame: db '{"op":0,"s":25,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"id":"1","name":"healthcheck","type":1}}}'
+healthcheck_frame_len equ $ - healthcheck_frame
+healthcheck_denied_frame: db '{"op":0,"s":26,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"guild_id":"1","member":{"permissions":"0","user":{"id":"member-1"}},"data":{"id":"1","name":"healthcheck","type":1}}}'
+healthcheck_denied_frame_len equ $ - healthcheck_denied_frame
 unknown_frame_len equ $ - unknown_frame
 wrong_type_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":4,"data":{"id":"4","name":"info","type":1}}}'
 wrong_type_frame_len equ $ - wrong_type_frame
@@ -893,6 +1064,18 @@ word_added_response: db 'Kata ditambahkan ke blacklist.'
 word_added_response_len equ $ - word_added_response
 word_removed_response: db 'Kata dihapus dari blacklist.'
 word_removed_response_len equ $ - word_removed_response
+health_probe_value: db 'cache_ping'
+health_probe_value_len equ $ - health_probe_value
+health_bot_roles: db '["2002"]'
+health_bot_roles_len equ $ - health_bot_roles
+healthcheck_deferred_response: db '{"type":5,"data":{"flags":64}}'
+healthcheck_deferred_response_len equ $ - healthcheck_deferred_response
+healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal","fields":[{"name":"Database (SQLite)","value":"Read/write OK","inline":true},{"name":"In-memory Cache","value":"Hit/invalidate OK","inline":true},{"name":"Groq API","value":"Probe respons OK","inline":true},{"name":"Bot Permissions","value":"Permission cache OK","inline":true},{"name":"Discord Latency","value":"Heartbeat ACK <= 500ms","inline":true}]}]}'
+healthcheck_ok_edit_len equ $ - healthcheck_ok_edit
+healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada komponen bermasalah","description":"Satu atau lebih probe bounded gagal atau cache belum lengkap. Periksa konfigurasi dan coba lagi."}]}'
+healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
+health_probe_setting: db '__healthcheck_probe__'
+health_probe_setting_len equ $ - health_probe_setting
 autorole_id: db '444444444444444444'
 autorole_id_len equ $ - autorole_id
 setting_autorole: db 'auto_role'
@@ -908,6 +1091,11 @@ config_delete_calls: dq 0
 word_add_calls: dq 0
 word_remove_calls: dq 0
 autorole_hierarchy_allowed: db 0
+health_permission_allowed: db 1
+health_edit_calls: dq 0
+gateway_bot_user_id: db '998877665544332211'
+gateway_bot_user_id_len: dd 18
+gateway_last_heartbeat_latency_ms: dq 100
 bot_owner_ptr: dq 0
 bot_owner_len: dd 0
 expected_json_ptr: dq 0
@@ -922,4 +1110,8 @@ expected_config_value_ptr: dq 0
 expected_config_value_len: dd 0
 expected_word_ptr: dq 0
 expected_word_len: dd 0
+expected_delete_setting_ptr: dq 0
+expected_delete_setting_len: dd 0
+expected_health_edit_ptr: dq 0
+expected_health_edit_len: dd 0
 failure_stage: dd 0

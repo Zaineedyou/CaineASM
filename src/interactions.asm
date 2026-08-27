@@ -16,6 +16,16 @@ extern guild_config_delete
 extern guild_word_add
 extern guild_word_remove
 extern guild_auth_bot_above_role
+extern guild_auth_get_bot_roles
+extern guild_auth_roles_have
+extern guild_config_get
+extern groq_select_guild
+extern groq_select_history
+extern groq_chat_once
+extern discord_interaction_edit_original
+extern gateway_bot_user_id
+extern gateway_bot_user_id_len
+extern gateway_last_heartbeat_latency_ms
 
 %define FRAME_ID_CAP 64
 %define TOKEN_CAP 192
@@ -179,6 +189,13 @@ interaction_handle_gateway:
     call equal_literal
     test al, al
     jnz .dashboard
+    lea rdi, [interaction_name]
+    mov esi, [interaction_name_len]
+    lea rdx, [name_healthcheck]
+    mov ecx, name_healthcheck_len
+    call equal_literal
+    test al, al
+    jnz .healthcheck
     jmp .ignored
 .component:
     mov rdi, rbx
@@ -856,6 +873,30 @@ interaction_handle_gateway:
     lea r8, [help_response]
     mov r9d, help_response_len
     jmp .respond
+.healthcheck:
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    call interaction_is_manager
+    test al, al
+    jz .dashboard_denied
+    mov rdi, rbx
+    mov rsi, [interaction_payload_end]
+    call interaction_load_guild_id
+    test al, al
+    jz .component_config_failure
+    lea r8, [healthcheck_deferred_response]
+    mov r9d, healthcheck_deferred_response_len
+    lea rdi, [interaction_id]
+    mov esi, [interaction_id_len]
+    lea rdx, [interaction_token]
+    mov ecx, [interaction_token_len]
+    call discord_interaction_respond_json
+    test eax, eax
+    js .out
+    call interaction_run_healthcheck
+    ; Initial ACK already completed. A failed edit must not tear down Gateway.
+    xor eax, eax
+    jmp .out
 .dashboard:
     mov rdi, rbx
     mov rsi, [interaction_payload_end]
@@ -889,6 +930,163 @@ interaction_handle_gateway:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; Runs bounded synchronous probes after the initial type-5 callback. The
+; bitmask is local-only: storage/cache=1, Groq=2, bot permissions=4, latency=8.
+; The interaction token is reused only to edit its original response.
+interaction_run_healthcheck:
+    push rbx
+    sub rsp, 8
+    xor ebx, ebx
+    call interaction_health_storage_probe
+    test al, al
+    jz .storage_done
+    or ebx, 1
+.storage_done:
+    call interaction_health_groq_probe
+    test al, al
+    jz .groq_done
+    or ebx, 2
+.groq_done:
+    call interaction_health_permissions_probe
+    test al, al
+    jz .permissions_done
+    or ebx, 4
+.permissions_done:
+    call interaction_health_latency_probe
+    test al, al
+    jz .latency_done
+    or ebx, 8
+.latency_done:
+    cmp ebx, 15
+    jne .degraded
+    lea r8, [healthcheck_ok_edit]
+    mov r9d, healthcheck_ok_edit_len
+    jmp .edit
+.degraded:
+    lea r8, [healthcheck_degraded_edit]
+    mov r9d, healthcheck_degraded_edit_len
+.edit:
+    lea rdi, [gateway_bot_user_id]
+    mov esi, [gateway_bot_user_id_len]
+    lea rdx, [interaction_token]
+    mov ecx, [interaction_token_len]
+    call discord_interaction_edit_original
+    add rsp, 8
+    pop rbx
+    ret
+
+; AL=1 only after temporary guild config write, readback, and delete all work.
+interaction_health_storage_probe:
+    push r12
+    push r13
+    sub rsp, 8
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [health_probe_setting]
+    mov ecx, health_probe_setting_len
+    lea r8, [health_probe_value]
+    mov r9d, health_probe_value_len
+    call guild_config_set
+    test eax, eax
+    js .no
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [health_probe_setting]
+    mov ecx, health_probe_setting_len
+    call guild_config_get
+    mov r12, rax
+    mov r13d, edx
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [health_probe_setting]
+    mov ecx, health_probe_setting_len
+    call guild_config_delete
+    test eax, eax
+    js .no
+    test r12, r12
+    jz .no
+    cmp r13d, health_probe_value_len
+    jne .no
+    mov rdi, r12
+    lea rsi, [health_probe_value]
+    mov edx, health_probe_value_len
+    call equal_bytes
+    test al, al
+    jz .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    add rsp, 8
+    pop r13
+    pop r12
+    ret
+
+; AL=1 only after a bounded non-streaming Groq ping. No response is retained.
+interaction_health_groq_probe:
+    sub rsp, 8
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    call groq_select_guild
+    xor edi, edi
+    xor esi, esi
+    call groq_select_history
+    lea rdi, [health_probe_ping]
+    mov esi, health_probe_ping_len
+    lea rdx, [health_probe_reply]
+    mov ecx, 1901
+    call groq_chat_once
+    test eax, eax
+    js .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    add rsp, 8
+    ret
+
+; AL=1 only when cached bot roles prove all requested permissions or Administrator.
+interaction_health_permissions_probe:
+    sub rsp, 8
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    call guild_auth_get_bot_roles
+    test rax, rax
+    jz .no
+    test edx, edx
+    jle .no
+    mov r9d, edx
+    mov rdx, rax
+    mov ecx, r9d
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    mov r8, 0x16800
+    call guild_auth_roles_have
+    test al, al
+    jz .no
+    mov al, 1
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    add rsp, 8
+    ret
+
+; AL=1 only for a freshly observed ACK latency at or below 500 milliseconds.
+interaction_health_latency_probe:
+    mov rax, [gateway_last_heartbeat_latency_ms]
+    test rax, rax
+    jz .no
+    cmp rax, 500
+    ja .no
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; RDI bytes, ESI len, RDX literal, ECX literal len. AL=1 exact.
@@ -1752,6 +1950,8 @@ name_help: db 'help'
 name_help_len equ $ - name_help
 name_dashboard: db 'dashboard'
 name_dashboard_len equ $ - name_dashboard
+name_healthcheck: db 'healthcheck'
+name_healthcheck_len equ $ - name_healthcheck
 component_back: db 'dash_back'
 component_back_len equ $ - component_back
 component_general: db 'dash_general'
@@ -1864,6 +2064,18 @@ model_qwen_saved_response: db 'Model diganti ke qwen/qwen3-32b.'
 model_qwen_saved_response_len equ $ - model_qwen_saved_response
 config_failure_response: db 'Konfigurasi tidak dapat disimpan.'
 config_failure_response_len equ $ - config_failure_response
+healthcheck_deferred_response: db '{"type":5,"data":{"flags":64}}'
+healthcheck_deferred_response_len equ $ - healthcheck_deferred_response
+healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal","fields":[{"name":"Database (SQLite)","value":"Read/write OK","inline":true},{"name":"In-memory Cache","value":"Hit/invalidate OK","inline":true},{"name":"Groq API","value":"Probe respons OK","inline":true},{"name":"Bot Permissions","value":"Permission cache OK","inline":true},{"name":"Discord Latency","value":"Heartbeat ACK <= 500ms","inline":true}]}]}'
+healthcheck_ok_edit_len equ $ - healthcheck_ok_edit
+healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada komponen bermasalah","description":"Satu atau lebih probe bounded gagal atau cache belum lengkap. Periksa konfigurasi dan coba lagi."}]}'
+healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
+health_probe_setting: db '__healthcheck_probe__'
+health_probe_setting_len equ $ - health_probe_setting
+health_probe_value: db 'cache_ping'
+health_probe_value_len equ $ - health_probe_value
+health_probe_ping: db 'ping'
+health_probe_ping_len equ $ - health_probe_ping
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
 info_response_len equ $ - info_response
 help_response: db 'Caine commands: chat via prefix or mention; moderation, AFK, leveling, configuration, /info, and /help.'
@@ -1961,3 +2173,4 @@ interaction_modal_value: resb CONFIG_TEXT_CAP
 interaction_modal_value_len: resd 1
 interaction_word: resb 27
 interaction_word_len: resd 1
+health_probe_reply: resb 1901
