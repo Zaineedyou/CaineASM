@@ -33,6 +33,7 @@ extern gateway_last_heartbeat_latency_ms
 %define CONFIG_TEXT_CAP 512
 %define EPHEMERAL_FLAG 64
 %define PERMISSION_ADMINISTRATOR 0x8
+%define DASHBOARD_DYNAMIC_CAP 1024
 
 section .text
 
@@ -509,8 +510,11 @@ interaction_handle_gateway:
     mov r9d, modal_sethistory_response_len
     jmp .component_respond_json
 .component_status:
-    lea r8, [dashboard_status_response]
-    mov r9d, dashboard_status_response_len
+    call interaction_build_status_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_status_dynamic]
     jmp .component_respond_json
 .component_setpersona:
     lea r8, [modal_setpersona_response]
@@ -930,6 +934,81 @@ interaction_handle_gateway:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; Builds a type-7 dashboard status response without exposing arbitrary stored
+; data. Only `max_history` accepted by interaction_history_valid is emitted.
+; RAX is the response length, or -1 when the fixed body capacity would overflow.
+interaction_build_status_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [status_default_history]
+    mov r15d, status_default_history_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_history]
+    mov ecx, setting_history_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_history_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, dashboard_status_prefix_len
+    add eax, r15d
+    add eax, dashboard_status_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_status_dynamic]
+    lea rsi, [dashboard_status_prefix]
+    mov edx, dashboard_status_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_status_dynamic + dashboard_status_prefix_len]
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    lea rdi, [dashboard_status_dynamic + dashboard_status_prefix_len]
+    add rdi, r15
+    lea rsi, [dashboard_status_suffix]
+    mov edx, dashboard_status_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_status_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=destination, RSI=source, EDX=count. Bounded callers prevalidate space.
+interaction_copy_bytes:
+    xor ecx, ecx
+.loop:
+    cmp ecx, edx
+    jae .done
+    mov al, [rsi + rcx]
+    mov [rdi + rcx], al
+    inc ecx
+    jmp .loop
+.done:
     ret
 
 ; Runs bounded synchronous probes after the initial type-5 callback. The
@@ -2074,6 +2153,12 @@ health_probe_setting: db '__healthcheck_probe__'
 health_probe_setting_len equ $ - health_probe_setting
 health_probe_value: db 'cache_ping'
 health_probe_value_len equ $ - health_probe_value
+status_default_history: db '30'
+status_default_history_len equ $ - status_default_history
+dashboard_status_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"'
+dashboard_status_prefix_len equ $ - dashboard_status_prefix
+dashboard_status_suffix: db ' messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_status_suffix_len equ $ - dashboard_status_suffix
 health_probe_ping: db 'ping'
 health_probe_ping_len equ $ - health_probe_ping
 info_response: db 'Caine — AI Discord Bot. Status: Online. Default model: Llama 3.3 70B.'
@@ -2174,3 +2259,4 @@ interaction_modal_value_len: resd 1
 interaction_word: resb 27
 interaction_word_len: resd 1
 health_probe_reply: resb 1901
+dashboard_status_dynamic: resb DASHBOARD_DYNAMIC_CAP

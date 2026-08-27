@@ -509,6 +509,20 @@ _start:
     mov byte [health_permission_allowed], 1
 
     mov dword [failure_stage], 28
+    mov byte [status_history_mode], 1
+    lea rax, [status_dynamic_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], status_dynamic_response_len
+    lea rdi, [dashboard_status_frame]
+    mov esi, dashboard_status_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 9
+    jne .fail
+    mov byte [status_history_mode], 0
+
+    mov dword [failure_stage], 29
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], manager_denied_response_len
@@ -537,10 +551,10 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 8
+    cmp qword [json_callback_calls], 9
     jne .fail
 
-    mov dword [failure_stage], 30
+    mov dword [failure_stage], 31
     lea rax, [config_failure_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], config_failure_response_len
@@ -554,7 +568,7 @@ _start:
     cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 31
+    mov dword [failure_stage], 32
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
@@ -563,7 +577,7 @@ _start:
     cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 32
+    mov dword [failure_stage], 33
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
@@ -572,7 +586,7 @@ _start:
     cmp qword [callback_calls], 22
     jne .fail
 
-    mov dword [failure_stage], 33
+    mov dword [failure_stage], 34
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
@@ -592,6 +606,12 @@ _start:
 ; Bounded healthcheck seams: no network and no durable store are accessed by
 ; this vector. Dedicated cases below can control their success bits.
 guild_config_get:
+    cmp byte [status_history_mode], 0
+    je .health
+    lea rax, [history_limit]
+    mov edx, history_limit_len
+    ret
+.health:
     lea rax, [health_probe_value]
     mov edx, health_probe_value_len
     ret
@@ -961,6 +981,8 @@ healthcheck_frame: db '{"op":0,"s":25,"t":"INTERACTION_CREATE","d":{"id":"112233
 healthcheck_frame_len equ $ - healthcheck_frame
 healthcheck_denied_frame: db '{"op":0,"s":26,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"guild_id":"1","member":{"permissions":"0","user":{"id":"member-1"}},"data":{"id":"1","name":"healthcheck","type":1}}}'
 healthcheck_denied_frame_len equ $ - healthcheck_denied_frame
+dashboard_status_frame: db '{"op":0,"s":27,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_status","component_type":2}}}'
+dashboard_status_frame_len equ $ - dashboard_status_frame
 unknown_frame_len equ $ - unknown_frame
 wrong_type_frame: db '{"op":0,"s":4,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":4,"data":{"id":"4","name":"info","type":1}}}'
 wrong_type_frame_len equ $ - wrong_type_frame
@@ -1074,6 +1096,8 @@ healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal"
 healthcheck_ok_edit_len equ $ - healthcheck_ok_edit
 healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada komponen bermasalah","description":"Satu atau lebih probe bounded gagal atau cache belum lengkap. Periksa konfigurasi dan coba lagi."}]}'
 healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
+status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"32 messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+status_dynamic_response_len equ $ - status_dynamic_response
 health_probe_setting: db '__healthcheck_probe__'
 health_probe_setting_len equ $ - health_probe_setting
 autorole_id: db '444444444444444444'
@@ -1092,6 +1116,7 @@ word_add_calls: dq 0
 word_remove_calls: dq 0
 autorole_hierarchy_allowed: db 0
 health_permission_allowed: db 1
+status_history_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18
