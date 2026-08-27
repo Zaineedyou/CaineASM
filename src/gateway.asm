@@ -30,6 +30,7 @@ extern channel_auth_reset
 extern channel_auth_cache_guild_create
 extern lifecycle_member_add
 extern lifecycle_member_remove
+extern interaction_handle_gateway
 
 %define SYS_NANOSLEEP 35
 %define SYS_CLOCK_GETTIME 228
@@ -196,6 +197,13 @@ gateway_process_frame:
     call literal_equal
     test al, al
     jnz .message_create
+    lea rdi, [event_name]
+    mov esi, r14d
+    lea rdx, [event_interaction_create]
+    mov ecx, event_interaction_create_len
+    call literal_equal
+    test al, al
+    jnz .interaction_create
     jmp .none
 
 .ready:
@@ -234,6 +242,12 @@ gateway_process_frame:
     call dispatch_message_create
     ; REST errors do not invalidate the Gateway session; later rate-limit policy
     ; will make a retry decision rather than tearing down event reception here.
+    jmp .none
+.interaction_create:
+    mov rdi, r12
+    mov rsi, r13
+    call interaction_handle_gateway
+    ; A bounded callback failure must not tear down the live Gateway transport.
     jmp .none
 
 .opcode:
@@ -801,6 +815,8 @@ event_member_remove: db 'GUILD_MEMBER_REMOVE'
 event_member_remove_len equ $ - event_member_remove
 event_message_create: db 'MESSAGE_CREATE'
 event_message_create_len equ $ - event_message_create
+event_interaction_create: db 'INTERACTION_CREATE'
+event_interaction_create_len equ $ - event_interaction_create
 identify_prefix: db '{"op":2,"d":{"token":"'
 identify_prefix_len equ $ - identify_prefix
 identify_suffix: db '","intents":37379,"properties":{"os":"linux","browser":"caine-asm","device":"caine-asm"}}}'

@@ -2,7 +2,7 @@ NASM ?= nasm
 CC ?= gcc
 BUILD_DIR := build
 BINARY := $(BUILD_DIR)/caine-asm
-ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/channel_permissions.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/history.o $(BUILD_DIR)/ai_rate_limit.o $(BUILD_DIR)/base64.o $(BUILD_DIR)/attachment_fetch.o $(BUILD_DIR)/attachment_parser.o $(BUILD_DIR)/vision_payload.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
+ASM_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/gateway.o $(BUILD_DIR)/interactions.o $(BUILD_DIR)/commands.o $(BUILD_DIR)/json.o $(BUILD_DIR)/discord_rest.o $(BUILD_DIR)/groq.o $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/state_view.o $(BUILD_DIR)/guild_config.o $(BUILD_DIR)/guild_policy.o $(BUILD_DIR)/guild_auth.o $(BUILD_DIR)/channel_permissions.o $(BUILD_DIR)/lifecycle.o $(BUILD_DIR)/warnings.o $(BUILD_DIR)/history.o $(BUILD_DIR)/ai_rate_limit.o $(BUILD_DIR)/base64.o $(BUILD_DIR)/attachment_fetch.o $(BUILD_DIR)/attachment_parser.o $(BUILD_DIR)/vision_payload.o $(BUILD_DIR)/store.o $(BUILD_DIR)/afk.o $(BUILD_DIR)/xp.o $(BUILD_DIR)/persist.o
 ADAPTER_OBJECTS := $(BUILD_DIR)/driver.o $(BUILD_DIR)/secure_transport.o
 CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
@@ -13,6 +13,7 @@ REST_TEST := $(BUILD_DIR)/discord-rest-vector
 JSON_TEST := $(BUILD_DIR)/json-vector
 DISPATCH_TEST := $(BUILD_DIR)/dispatch-vector
 GATEWAY_TEST := $(BUILD_DIR)/gateway-vector
+INTERACTION_TEST := $(BUILD_DIR)/interactions-vector
 GROQ_TEST := $(BUILD_DIR)/groq-vector
 XP_TEST := $(BUILD_DIR)/xp-vector
 PERSIST_TEST := $(BUILD_DIR)/persist-vector
@@ -42,6 +43,9 @@ $(BUILD_DIR)/main.o: src/main.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/gateway.o: src/gateway.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(BUILD_DIR)/interactions.o: src/interactions.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
 
 $(BUILD_DIR)/commands.o: src/commands.asm | $(BUILD_DIR)
@@ -172,6 +176,15 @@ $(GATEWAY_TEST): $(BUILD_DIR)/gateway-vector.o $(BUILD_DIR)/gateway.o $(BUILD_DI
 
 test-gateway: $(GATEWAY_TEST)
 	./$(GATEWAY_TEST)
+
+$(BUILD_DIR)/interactions-vector.o: tests/interactions_vector.asm | $(BUILD_DIR)
+	$(NASM) -f elf64 -g -F dwarf $< -o $@
+
+$(INTERACTION_TEST): $(BUILD_DIR)/interactions-vector.o $(BUILD_DIR)/interactions.o $(BUILD_DIR)/json.o
+	ld -static -z noexecstack -o $@ $^
+
+test-interactions: $(INTERACTION_TEST)
+	./$(INTERACTION_TEST)
 
 $(BUILD_DIR)/groq-vector.o: tests/groq_vector.asm | $(BUILD_DIR)
 	$(NASM) -f elf64 -g -F dwarf $< -o $@
@@ -326,7 +339,7 @@ $(VISION_PAYLOAD_TEST): $(BUILD_DIR)/vision-payload-vector.o $(BUILD_DIR)/vision
 test-vision-payload: $(VISION_PAYLOAD_TEST)
 	./$(VISION_PAYLOAD_TEST)
 
-test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-channel-permissions test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch test-attachment-parser test-vision-payload
+test: test-commands test-store-afk test-rest test-json test-dispatch test-gateway test-interactions test-groq test-xp test-persist test-state-replay test-state-view test-guild-config test-guild-policy test-guild-auth test-channel-permissions test-lifecycle test-warnings test-history test-ai-rate-limit test-base64 test-attachment-fetch test-attachment-parser test-vision-payload
 
 inspect: $(BINARY)
 	file $(BINARY)

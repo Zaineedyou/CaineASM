@@ -16,6 +16,7 @@ global channel_auth_reset
 global channel_auth_cache_guild_create
 global lifecycle_member_add
 global lifecycle_member_remove
+global interaction_handle_gateway
 global discord_token_ptr
 global discord_token_len
 extern gateway_bot_user_id
@@ -32,6 +33,7 @@ _start:
     call gateway_reset_state
     mov qword [send_calls], 0
     mov qword [dispatch_calls], 0
+    mov qword [interaction_calls], 0
 
     ; Hello starts the scheduler and sends an escaped bounded Identify payload.
     mov dword [failure_stage], 1
@@ -139,6 +141,19 @@ _start:
     call gateway_process_frame
     test eax, eax
     jnz .fail
+    cmp qword [dispatch_calls], 1
+    jne .fail
+
+    ; INTERACTION_CREATE is isolated from message commands and callback errors
+    ; cannot alter Gateway session routing.
+    mov dword [failure_stage], 64
+    lea rdi, [interaction_frame]
+    mov esi, interaction_frame_len
+    call gateway_process_frame
+    test eax, eax
+    jnz .fail
+    cmp qword [interaction_calls], 1
+    jne .fail
     cmp qword [dispatch_calls], 1
     jne .fail
 
@@ -300,6 +315,25 @@ dispatch_message_create:
     mov eax, -1
     ret
 
+; Interaction seam: verifies the complete typed Gateway frame reaches only
+; the interaction handler, never message dispatch.
+interaction_handle_gateway:
+    cmp rsi, interaction_frame_len
+    jne .bad
+    lea r8, [interaction_frame]
+    mov r9d, interaction_frame_len
+    mov rsi, r8
+    mov edx, r9d
+    call equal_bytes
+    test al, al
+    jz .bad
+    inc qword [interaction_calls]
+    xor eax, eax
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 secure_gateway_connect:
     xor eax, eax
     ret
@@ -346,6 +380,8 @@ invalid_false: db '{"op":9,"d":false}'
 invalid_false_len equ $ - invalid_false
 message_frame: db '{"op":0,"s":43,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"!status","author":{"bot":false}}}'
 message_frame_len equ $ - message_frame
+interaction_frame: db '{"op":0,"s":431,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":2,"data":{"id":"1","name":"info","type":1}}}'
+interaction_frame_len equ $ - interaction_frame
 reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
 guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","owner_id":"9001","roles":[]}}'
@@ -368,6 +404,7 @@ expected_payload_ptr: dq 0
 expected_payload_len: dd 0
 send_calls: dq 0
 dispatch_calls: dq 0
+interaction_calls: dq 0
 auth_reset_calls: dq 0
 auth_cache_calls: dq 0
 channel_cache_calls: dq 0
