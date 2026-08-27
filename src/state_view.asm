@@ -810,11 +810,11 @@ view_append_uint32:
     ret
 
 section .rodata
-afk_header: db 'AFK users:\n'
+afk_header: db 'AFK users:', 10
 afk_header_len equ $ - afk_header
-words_header: db 'Banned words:\n'
+words_header: db 'Banned words:', 10
 words_header_len equ $ - words_header
-words_empty: db '(none)\n'
+words_empty: db '(none)', 10
 words_empty_len equ $ - words_empty
 words_row_prefix: db '- '
 words_row_prefix_len equ $ - words_row_prefix

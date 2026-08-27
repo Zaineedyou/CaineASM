@@ -4919,7 +4919,24 @@ warning_reply_prefix: db 'Warnings: '
 warning_reply_prefix_len equ $ - warning_reply_prefix
 warning_reply_suffix: db '.'
 warning_reply_suffix_len equ $ - warning_reply_suffix
-help_response: db '**Hai sayang! Ini cara pakai aku:**\n`Caine <pertanyaan>` - tanya apapun\n`Caine` + kirim gambar - analisis gambar\n`Caine summarize [jumlah]` - rangkum chat\n`Caine report @user alasan` - laporin user\n`Caine reset` - hapus memory\n`Caine afk [alasan]` - set AFK\n`Caine afklist` - lihat siapa yang AFK\n`Caine rank [@user]` - lihat rank/XP\n`Caine leaderboard` - top 10 XP\n`Caine status` - status bot\n`Caine setmodel <alias>` - ganti model AI\n`Caine sethistory <angka>` - set batas history chat\n`/info` - info bot\n`/dashboard` - buka dashboard (admin)\n\n**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove\n\n**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
+help_response:
+    db '**Hai sayang! Ini cara pakai aku:**', 10
+    db '`Caine <pertanyaan>` - tanya apapun', 10
+    db '`Caine` + kirim gambar - analisis gambar', 10
+    db '`Caine summarize [jumlah]` - rangkum chat', 10
+    db '`Caine report @user alasan` - laporin user', 10
+    db '`Caine reset` - hapus memory', 10
+    db '`Caine afk [alasan]` - set AFK', 10
+    db '`Caine afklist` - lihat siapa yang AFK', 10
+    db '`Caine rank [@user]` - lihat rank/XP', 10
+    db '`Caine leaderboard` - top 10 XP', 10
+    db '`Caine status` - status bot', 10
+    db '`Caine setmodel <alias>` - ganti model AI', 10
+    db '`Caine sethistory <angka>` - set batas history chat', 10
+    db '`/info` - info bot', 10
+    db '`/dashboard` - buka dashboard (admin)', 10, 10
+    db '**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove', 10, 10
+    db '**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
 help_response_len equ $ - help_response
 status_prefix: db 0xf0, 0x9f, 0x93, 0x8a, ' **Status Bot**', 10, 0xe2, 0x8f, 0xb1, ' Uptime: '
 status_prefix_len equ $ - status_prefix

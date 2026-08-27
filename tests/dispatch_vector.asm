@@ -3054,7 +3054,24 @@ vision_b64: db 'AQID'
 vision_b64_len equ $ - vision_b64
 bot_user_id: db '9001'
 bot_user_id_len equ $ - bot_user_id
-help_response: db '**Hai sayang! Ini cara pakai aku:**\n`Caine <pertanyaan>` - tanya apapun\n`Caine` + kirim gambar - analisis gambar\n`Caine summarize [jumlah]` - rangkum chat\n`Caine report @user alasan` - laporin user\n`Caine reset` - hapus memory\n`Caine afk [alasan]` - set AFK\n`Caine afklist` - lihat siapa yang AFK\n`Caine rank [@user]` - lihat rank/XP\n`Caine leaderboard` - top 10 XP\n`Caine status` - status bot\n`Caine setmodel <alias>` - ganti model AI\n`Caine sethistory <angka>` - set batas history chat\n`/info` - info bot\n`/dashboard` - buka dashboard (admin)\n\n**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove\n\n**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
+help_response:
+    db '**Hai sayang! Ini cara pakai aku:**', 10
+    db '`Caine <pertanyaan>` - tanya apapun', 10
+    db '`Caine` + kirim gambar - analisis gambar', 10
+    db '`Caine summarize [jumlah]` - rangkum chat', 10
+    db '`Caine report @user alasan` - laporin user', 10
+    db '`Caine reset` - hapus memory', 10
+    db '`Caine afk [alasan]` - set AFK', 10
+    db '`Caine afklist` - lihat siapa yang AFK', 10
+    db '`Caine rank [@user]` - lihat rank/XP', 10
+    db '`Caine leaderboard` - top 10 XP', 10
+    db '`Caine status` - status bot', 10
+    db '`Caine setmodel <alias>` - ganti model AI', 10
+    db '`Caine sethistory <angka>` - set batas history chat', 10
+    db '`/info` - info bot', 10
+    db '`/dashboard` - buka dashboard (admin)', 10, 10
+    db '**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove', 10, 10
+    db '**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
 help_response_len equ $ - help_response
 status_uptime_value: db '2d 3h 4m 5s'
 status_uptime_value_len equ $ - status_uptime_value
