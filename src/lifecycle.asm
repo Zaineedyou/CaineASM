@@ -490,9 +490,9 @@ setting_goodbye_message: db 'goodbye_msg'
 setting_goodbye_message_len equ $ - setting_goodbye_message
 setting_auto_role: db 'auto_role'
 setting_auto_role_len equ $ - setting_auto_role
-default_welcome: db 'Selamat datang {user} di **{server}**!'
+default_welcome: db 'Selamat datang {user} di **{server}**! ', 0xf0, 0x9f, 0x8e, 0x89
 default_welcome_len equ $ - default_welcome
-default_goodbye: db 'Selamat tinggal **{username}** dari **{server}**.'
+default_goodbye: db 'Selamat tinggal **{username}** dari **{server}**. ', 0xf0, 0x9f, 0x91, 0x8b
 default_goodbye_len equ $ - default_goodbye
 placeholder_user: db '{user}'
 placeholder_user_len equ $ - placeholder_user

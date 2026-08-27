@@ -275,7 +275,7 @@ cached_guild_name: db 'Guild Cache'
 cached_guild_name_len equ $ - cached_guild_name
 welcome_expected: db 'Hi <@u1> Alice Guild Cache 42'
 welcome_expected_len equ $ - welcome_expected
-goodbye_expected: db 'Selamat tinggal **Alice** dari **Guild Cache**.'
+goodbye_expected: db 'Selamat tinggal **Alice** dari **Guild Cache**. ', 0xf0, 0x9f, 0x91, 0x8b
 goodbye_expected_len equ $ - goodbye_expected
 welcome_cache_miss_expected: db 'Hi <@u1> Alice  0'
 welcome_cache_miss_expected_len equ $ - welcome_cache_miss_expected
