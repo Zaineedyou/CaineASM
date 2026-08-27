@@ -6,6 +6,7 @@ global gateway_process_frame
 global gateway_reset_state
 global gateway_bot_user_id
 global gateway_bot_user_id_len
+global gateway_last_heartbeat_latency_ms
 
 global gateway_send_identify
 global gateway_send_resume
@@ -304,6 +305,19 @@ gateway_process_frame:
     jnz .fatal
     jmp .none
 .ack:
+    cmp byte [heartbeat_ack_pending], 0
+    je .ack_clear
+    call gateway_now_ms
+    test rax, rax
+    jz .ack_clear
+    mov rdx, [heartbeat_sent_ms]
+    test rdx, rdx
+    jz .ack_clear
+    cmp rax, rdx
+    jb .ack_clear
+    sub rax, rdx
+    mov [gateway_last_heartbeat_latency_ms], rax
+.ack_clear:
     mov byte [heartbeat_ack_pending], 0
     jmp .none
 .heartbeat_now:
@@ -591,6 +605,8 @@ gateway_send_heartbeat:
     call secure_gateway_send_text
     test rax, rax
     js .bad
+    call gateway_now_ms
+    mov [heartbeat_sent_ms], rax
     mov byte [heartbeat_ack_pending], 1
     xor eax, eax
     pop rbx
@@ -773,6 +789,8 @@ gateway_reset_state:
     mov byte [has_sequence], 0
     mov dword [heartbeat_ms], 0
     mov qword [next_heartbeat_ms], 0
+    mov qword [heartbeat_sent_ms], 0
+    mov qword [gateway_last_heartbeat_latency_ms], 0
     mov qword [sequence], 0
     mov dword [session_id_len], 0
     mov dword [resume_url_len], 0
@@ -859,6 +877,8 @@ resume_allowed: db 0
 has_sequence: db 0
 sequence: dq 0
 next_heartbeat_ms: dq 0
+heartbeat_sent_ms: dq 0
+gateway_last_heartbeat_latency_ms: dq 0
 gateway_length: dq 0
 session_id_len: dd 0
 resume_url_len: dd 0
