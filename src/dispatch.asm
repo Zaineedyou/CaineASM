@@ -338,6 +338,28 @@ dispatch_message_create:
     lea rdx, [author_id]
     mov ecx, [author_id_len]
     call afk_clear
+    cmp eax, -1
+    je .state_done
+    lea rdi, [afk_welcome_response]
+    lea rsi, [afk_welcome_prefix]
+    mov edx, afk_welcome_prefix_len
+    call copy_bytes
+    mov ebx, afk_welcome_prefix_len
+    lea rdi, [afk_welcome_response + rbx]
+    lea rsi, [author_id]
+    mov edx, [author_id_len]
+    call copy_bytes
+    add ebx, edx
+    lea rdi, [afk_welcome_response + rbx]
+    lea rsi, [afk_welcome_suffix]
+    mov edx, afk_welcome_suffix_len
+    call copy_bytes
+    add ebx, edx
+    lea rdi, [channel_id]
+    mov esi, r14d
+    lea rdx, [afk_welcome_response]
+    mov ecx, ebx
+    call discord_send_text
 .state_done:
 
     ; Disabled channels still reach prior message-state bookkeeping, but no
@@ -670,11 +692,16 @@ dispatch_message_create:
     lea r8, [message_content + rbx]
     mov r9d, r15d
     sub r9d, ebx
+    mov [afk_response_reason_ptr], r8
+    mov [afk_response_reason_len], r9d
     call afk_set
     test eax, eax
     jnz .afk_error
-    lea rdi, [afk_response]
-    mov esi, afk_response_len
+    call dispatch_build_afk_response
+    test eax, eax
+    jle .afk_error
+    mov esi, eax
+    lea rdi, [report_log]
     jmp .reply
 .afk_default_reason:
     lea rdi, [guild_id]
@@ -683,11 +710,16 @@ dispatch_message_create:
     mov ecx, [author_id_len]
     lea r8, [default_afk_reason]
     mov r9d, default_afk_reason_len
+    mov [afk_response_reason_ptr], r8
+    mov [afk_response_reason_len], r9d
     call afk_set
     test eax, eax
     jnz .afk_error
-    lea rdi, [afk_response]
-    mov esi, afk_response_len
+    call dispatch_build_afk_response
+    test eax, eax
+    jle .afk_error
+    mov esi, eax
+    lea rdi, [report_log]
     jmp .reply
 .afklist:
     cmp dword [guild_id_len], 0
@@ -4620,6 +4652,48 @@ dispatch_log_automod:
     pop rbx
     ret
 
+; EAX=rendered AFK confirmation length, or -1. Uses report_log only for this
+; immediate response; dispatch is single-threaded and no audit follows this send.
+dispatch_build_afk_response:
+    mov dword [report_log_len], 0
+    lea rdi, [afk_response_prefix]
+    mov esi, afk_response_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .bad
+    cmp dword [author_name_len], 0
+    jle .author_id
+    lea rdi, [author_name]
+    mov esi, [author_name_len]
+    jmp .append_author
+.author_id:
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+.append_author:
+    call automod_append_sanitized
+    test eax, eax
+    js .bad
+    lea rdi, [afk_response_middle]
+    mov esi, afk_response_middle_len
+    call report_append_bytes
+    test eax, eax
+    js .bad
+    mov rdi, [afk_response_reason_ptr]
+    mov esi, [afk_response_reason_len]
+    call automod_append_sanitized
+    test eax, eax
+    js .bad
+    lea rdi, [afk_response_suffix]
+    mov esi, afk_response_suffix_len
+    call report_append_bytes
+    test eax, eax
+    js .bad
+    mov eax, [report_log_len]
+    ret
+.bad:
+    mov eax, -1
+    ret
+
 ; RDI=source, ESI=len. EAX=out len or -1. Control/non-ASCII bytes become '?';
 ; @ gains a UTF-8 zero-width separator and backticks become apostrophes, avoiding
 ; notifications and code-fence injection in a plain-text audit message.
@@ -5036,6 +5110,16 @@ state_view_error_response: db 'State view could not be rendered.'
 state_view_error_response_len equ $ - state_view_error_response
 default_afk_reason: db 'AFK'
 default_afk_reason_len equ $ - default_afk_reason
+afk_response_prefix: db 0xf0, 0x9f, 0x92, 0xa4, ' **'
+afk_response_prefix_len equ $ - afk_response_prefix
+afk_response_middle: db '** sekarang AFK: *'
+afk_response_middle_len equ $ - afk_response_middle
+afk_response_suffix: db '*'
+afk_response_suffix_len equ $ - afk_response_suffix
+afk_welcome_prefix: db 0xe2, 0x9c, 0x85, ' Welcome back <@'
+afk_welcome_prefix_len equ $ - afk_welcome_prefix
+afk_welcome_suffix: db '>! AFK kamu dihapus.'
+afk_welcome_suffix_len equ $ - afk_welcome_suffix
 
 section .bss
 attachment_url: resb ATTACHMENT_URL_CAP
@@ -5095,9 +5179,12 @@ report_log: resb REPORT_LOG_CAP
 warning_reply: resb 64
 rank_response: resb 32
 rank_scratch: resb 10
+afk_welcome_response: resb 128
 status_uptime: resb STATUS_UPTIME_CAP
 status_uptime_len: resd 1
 status_reply: resb STATUS_REPLY_CAP
+afk_response_reason_ptr: resq 1
+afk_response_reason_len: resd 1
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP

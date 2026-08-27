@@ -1633,6 +1633,20 @@ _start:
     cmp qword [send_calls], 82
     jne .fail
 
+    mov dword [failure_stage], 81
+    mov byte [afk_present], 1
+    mov dword [afk_welcome_followup_enabled], 1
+    lea rax, [afk_welcome_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], afk_welcome_response_len
+    lea rdi, [afk_welcome_event]
+    mov esi, afk_welcome_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [send_calls], 84
+    jne .fail
+
     mov dword [target_mode], TARGET_NONE
     mov byte [bot_permission_enabled], 0
     mov eax, SYS_EXIT
@@ -2115,7 +2129,13 @@ xp_get:
     ret
 
 afk_clear:
+    cmp byte [afk_present], 0
+    je .absent
+    mov byte [afk_present], 0
     xor eax, eax
+    ret
+.absent:
+    mov eax, -1
     ret
 
 ; Automod seam returns a configured banned-word marker only for its dedicated vector.
@@ -2744,7 +2764,7 @@ discord_send_text:
     jmp .ok
 .chat_followup:
     cmp dword [chat_followup_enabled], 0
-    je .mod_followup
+    je .afk_welcome_followup
     mov dword [chat_followup_enabled], 0
     lea rax, [report_log_channel_value]
     mov [expected_channel_ptr], rax
@@ -2752,6 +2772,14 @@ discord_send_text:
     lea rax, [chat_audit_log]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], chat_audit_log_len
+    jmp .ok
+.afk_welcome_followup:
+    cmp dword [afk_welcome_followup_enabled], 0
+    je .mod_followup
+    mov dword [afk_welcome_followup_enabled], 0
+    lea rax, [help_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], help_response_len
     jmp .ok
 .mod_followup:
     cmp dword [mod_followup_enabled], 0
@@ -2840,6 +2868,8 @@ rate_limited_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","
 rate_limited_event_len equ $ - rate_limited_event
 clear_reset_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^clear","author":{"id":"clear-user","bot":false}}}'
 clear_reset_event_len equ $ - clear_reset_event
+afk_welcome_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^help","author":{"id":"user-2","bot":false}}}'
+afk_welcome_event_len equ $ - afk_welcome_event
 rank_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^rank","author":{"id":"user-2","bot":false}}}'
 rank_event_len equ $ - rank_event
 afk_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"guild_id":"guild-1","channel_id":"123456789012345678","content":"^afk dinner","author":{"id":"user-2","bot":false}}}'
@@ -2854,7 +2884,7 @@ author_id: db 'user-2'
 author_id_len equ $ - author_id
 afk_reason: db 'dinner'
 afk_reason_len equ $ - afk_reason
-afk_response: db 'AFK status saved for this server.'
+afk_response: db 0xf0, 0x9f, 0x92, 0xa4, ' **user-2** sekarang AFK: *dinner*'
 afk_response_len equ $ - afk_response
 summarize_event: db '{"op":0,"t":"MESSAGE_CREATE","d":{"channel_id":"123456789012345678","content":"^summarize brief this","author":{"bot":false}}}'
 summarize_event_len equ $ - summarize_event
@@ -3032,6 +3062,8 @@ status_response: db 0xf0, 0x9f, 0x93, 0x8a, ' **Status Bot**', 10, 0xe2, 0x8f, 0
 status_response_len equ $ - status_response
 reset_response: db 0xf0, 0x9f, 0xa7, 0xb9, ' Memory kita udah di-reset sayang!'
 reset_response_len equ $ - reset_response
+afk_welcome_response: db 0xe2, 0x9c, 0x85, ' Welcome back <@user-2>! AFK kamu dihapus.'
+afk_welcome_response_len equ $ - afk_welcome_response
 rank_response: db 'Your XP: 42'
 rank_response_len equ $ - rank_response
 afklist_response: db 'AFK members:', 10, '- user-2: dinner', 10
@@ -3182,6 +3214,7 @@ report_followup_enabled: dd 0
 automod_followup_enabled: dd 0
 chat_followup_enabled: dd 0
 mod_followup_enabled: dd 0
+afk_welcome_followup_enabled: dd 0
 report_log_enabled: dd 0
 delete_calls: dq 0
 clear_get_calls: dq 0
@@ -3205,6 +3238,7 @@ vision_mode: dd VISION_NONE
 vision_sequence: dd 0
 rate_allowed: db 1
 message_rate_allowed: db 1
+afk_present: db 0
 rate_allow_calls: dq 0
 message_rate_calls: dq 0
 vision_calls: dq 0
