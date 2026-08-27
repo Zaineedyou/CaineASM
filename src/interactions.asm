@@ -243,7 +243,18 @@ interaction_handle_gateway:
     mov ecx, component_welcome_len
     call equal_literal
     test al, al
+    jnz .component_welcome
+    lea rdi, [interaction_component_id]
+    mov esi, [interaction_component_id_len]
+    lea rdx, [component_model]
+    mov ecx, component_model_len
+    call equal_literal
+    test al, al
     jz .ignored
+    lea r8, [dashboard_model_response]
+    mov r9d, dashboard_model_response_len
+    jmp .component_respond_json
+.component_welcome:
     lea r8, [dashboard_welcome_response]
     mov r9d, dashboard_welcome_response_len
     jmp .component_respond_json
@@ -698,6 +709,8 @@ component_setlog: db 'dash_setlog'
 component_setlog_len equ $ - component_setlog
 component_welcome: db 'dash_welcome'
 component_welcome_len equ $ - component_welcome
+component_model: db 'dash_model'
+component_model_len equ $ - component_model
 modal_setlog_id: db 'modal_setlog'
 modal_setlog_id_len equ $ - modal_setlog_id
 setting_log_channel: db 'log_channel'
@@ -716,6 +729,8 @@ dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":
 dashboard_general_response_len equ $ - dashboard_general_response
 dashboard_welcome_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","description":"Atur channel dan pesan melalui tombol di bawah."}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_welcome_response_len equ $ - dashboard_welcome_response
+dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
 modal_setlog_response_len equ $ - modal_setlog_response
 setlog_saved_response: db 'Log channel diset.'
