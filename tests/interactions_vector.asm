@@ -75,6 +75,18 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 6
+    lea rax, [dashboard_welcome_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_welcome_response_len
+    lea rdi, [dashboard_welcome_frame]
+    mov esi, dashboard_welcome_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 4
+    jne .fail
+
+    mov dword [failure_stage], 8
     lea rax, [modal_setlog_response]
     mov [expected_json_ptr], rax
     mov dword [expected_json_len], modal_setlog_response_len
@@ -83,10 +95,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 4
+    cmp qword [json_callback_calls], 5
     jne .fail
 
-    mov dword [failure_stage], 7
+    mov dword [failure_stage], 9
     lea rax, [setlog_saved_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], setlog_saved_response_len
@@ -100,7 +112,7 @@ _start:
     cmp qword [callback_calls], 3
     jne .fail
 
-    mov dword [failure_stage], 9
+    mov dword [failure_stage], 11
     lea rax, [manager_denied_response]
     mov [expected_content_ptr], rax
     mov dword [expected_content_len], manager_denied_response_len
@@ -111,10 +123,10 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 4
     jne .fail
-    cmp qword [json_callback_calls], 4
+    cmp qword [json_callback_calls], 5
     jne .fail
 
-    mov dword [failure_stage], 10
+    mov dword [failure_stage], 12
     lea rdi, [unknown_frame]
     mov esi, unknown_frame_len
     call interaction_handle_gateway
@@ -123,7 +135,7 @@ _start:
     cmp qword [callback_calls], 4
     jne .fail
 
-    mov dword [failure_stage], 11
+    mov dword [failure_stage], 13
     lea rdi, [wrong_type_frame]
     mov esi, wrong_type_frame_len
     call interaction_handle_gateway
@@ -132,7 +144,7 @@ _start:
     cmp qword [callback_calls], 4
     jne .fail
 
-    mov dword [failure_stage], 12
+    mov dword [failure_stage], 14
     lea rdi, [malformed_frame]
     mov esi, malformed_frame_len
     call interaction_handle_gateway
@@ -312,6 +324,8 @@ dashboard_back_frame: db '{"op":0,"s":5,"t":"INTERACTION_CREATE","d":{"id":"1122
 dashboard_back_frame_len equ $ - dashboard_back_frame
 dashboard_general_frame: db '{"op":0,"s":6,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_general","component_type":2}}}'
 dashboard_general_frame_len equ $ - dashboard_general_frame
+dashboard_welcome_frame: db '{"op":0,"s":7,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_welcome","component_type":2}}}'
+dashboard_welcome_frame_len equ $ - dashboard_welcome_frame
 dashboard_setlog_frame: db '{"op":0,"s":7,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_setlog","component_type":2}}}'
 dashboard_setlog_frame_len equ $ - dashboard_setlog_frame
 modal_setlog_submit_frame: db '{"op":0,"s":8,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":5,"guild_id":"123456789012345678","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"modal_setlog","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","value":"987654321098765432"}]}]}}}'
@@ -333,6 +347,8 @@ dashboard_back_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":579
 dashboard_back_response_len equ $ - dashboard_back_response
 dashboard_general_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel","value":"Atur melalui tombol di bawah."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_general_response_len equ $ - dashboard_general_response
+dashboard_welcome_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65407,"title":"Welcome / Goodbye","description":"Atur channel dan pesan melalui tombol di bawah."}],"components":[{"type":1,"components":[{"type":2,"style":3,"label":"Set Welcome Channel","custom_id":"dash_setwelcome"},{"type":2,"style":1,"label":"Set Welcome Message","custom_id":"dash_setwelcomemsg"},{"type":2,"style":4,"label":"Set Goodbye Channel","custom_id":"dash_setgoodbye"},{"type":2,"style":1,"label":"Set Goodbye Message","custom_id":"dash_setgoodbyemsg"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_welcome_response_len equ $ - dashboard_welcome_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
 modal_setlog_response_len equ $ - modal_setlog_response
 setlog_saved_response: db 'Log channel diset.'
