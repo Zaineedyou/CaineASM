@@ -63,6 +63,8 @@ extern bot_prefix_ptr
 extern bot_prefix_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
+extern gateway_guild_count
+extern gateway_uptime_format
 extern discord_get_json
 extern discord_get_channel_messages
 extern discord_bulk_delete_messages
@@ -78,6 +80,8 @@ extern discord_bulk_delete_messages
 %define HISTORY_KEY_CAP 64
 %define STATE_VIEW_REPLY_CAP 2000
 %define REPORT_LOG_CAP 2000
+%define STATUS_UPTIME_CAP 64
+%define STATUS_REPLY_CAP 128
 %define ATTACHMENT_URL_CAP 1024
 %define ATTACHMENT_MIME_CAP 64
 %define VISION_IMAGE_CAP 11250
@@ -1842,8 +1846,39 @@ dispatch_message_create:
     mov esi, afk_error_response_len
     jmp .reply
 .status:
-    lea rdi, [status_response]
-    mov esi, status_response_len
+    lea rdi, [status_uptime]
+    mov esi, STATUS_UPTIME_CAP
+    call gateway_uptime_format
+    test eax, eax
+    jg .uptime_ready
+    lea rdi, [status_uptime]
+    lea rsi, [status_uptime_fallback]
+    mov edx, status_uptime_fallback_len
+    call copy_bytes
+    mov eax, status_uptime_fallback_len
+.uptime_ready:
+    mov [status_uptime_len], eax
+    lea rdi, [status_reply]
+    lea rsi, [status_prefix]
+    mov edx, status_prefix_len
+    call copy_bytes
+    mov ebx, status_prefix_len
+    lea rdi, [status_reply + rbx]
+    lea rsi, [status_uptime]
+    mov edx, [status_uptime_len]
+    call copy_bytes
+    add ebx, edx
+    lea rdi, [status_reply + rbx]
+    lea rsi, [status_servers_label]
+    mov edx, status_servers_label_len
+    call copy_bytes
+    add ebx, edx
+    call gateway_guild_count
+    lea rdi, [status_reply + rbx]
+    call format_uint32
+    add ebx, eax
+    lea rdi, [status_reply]
+    mov esi, ebx
     jmp .reply
 .reset:
     lea rdi, [reset_response]
@@ -4796,8 +4831,12 @@ warning_reply_suffix: db '.'
 warning_reply_suffix_len equ $ - warning_reply_suffix
 help_response: db '**Hai sayang! Ini cara pakai aku:**\n`Caine <pertanyaan>` - tanya apapun\n`Caine` + kirim gambar - analisis gambar\n`Caine summarize [jumlah]` - rangkum chat\n`Caine report @user alasan` - laporin user\n`Caine reset` - hapus memory\n`Caine afk [alasan]` - set AFK\n`Caine afklist` - lihat siapa yang AFK\n`Caine rank [@user]` - lihat rank/XP\n`Caine leaderboard` - top 10 XP\n`Caine status` - status bot\n`Caine setmodel <alias>` - ganti model AI\n`Caine sethistory <angka>` - set batas history chat\n`/info` - info bot\n`/dashboard` - buka dashboard (admin)\n\n**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove\n\n**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
 help_response_len equ $ - help_response
-status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
-status_response_len equ $ - status_response
+status_prefix: db 0xf0, 0x9f, 0x93, 0x8a, ' **Status Bot**', 10, 0xe2, 0x8f, 0xb1, ' Uptime: '
+status_prefix_len equ $ - status_prefix
+status_servers_label: db 10, 0xf0, 0x9f, 0x8c, 0x90, ' Servers: '
+status_servers_label_len equ $ - status_servers_label
+status_uptime_fallback: db '0d 0h 0m 0s'
+status_uptime_fallback_len equ $ - status_uptime_fallback
 reset_response: db 'Reset is reserved for the persistence module; current state is volatile.'
 reset_response_len equ $ - reset_response
 registered_notice: db 'That command is registered, but its handler is not active in this checkpoint.'
@@ -5040,6 +5079,9 @@ report_log: resb REPORT_LOG_CAP
 warning_reply: resb 64
 rank_response: resb 32
 rank_scratch: resb 10
+status_uptime: resb STATUS_UPTIME_CAP
+status_uptime_len: resd 1
+status_reply: resb STATUS_REPLY_CAP
 message_content: resb MESSAGE_CONTENT_CAP
 command_buffer: resb COMMAND_CAP
 ai_reply: resb AI_REPLY_CAP

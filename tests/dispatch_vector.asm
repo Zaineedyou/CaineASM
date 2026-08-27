@@ -57,6 +57,8 @@ global bot_prefix_ptr
 global bot_prefix_len
 global gateway_bot_user_id
 global gateway_bot_user_id_len
+global gateway_guild_count
+global gateway_uptime_format
 global discord_get_json
 global discord_get_channel_messages
 global discord_bulk_delete_messages
@@ -1620,6 +1622,23 @@ ai_rate_allow:
     mov al, [rate_allowed]
     ret
 
+; RDI=destination, ESI=capacity. EAX=bytes written.
+gateway_uptime_format:
+    cmp esi, status_uptime_value_len
+    jb .bad
+    lea rsi, [status_uptime_value]
+    mov edx, status_uptime_value_len
+    call copy_bytes
+    mov eax, status_uptime_value_len
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+gateway_guild_count:
+    mov eax, 7
+    ret
+
 ; RDI=prompt, ESI=length, RDX=reply destination, ECX=capacity.
 groq_chat_once:
     mov r10, rdx
@@ -2953,7 +2972,9 @@ bot_user_id: db '9001'
 bot_user_id_len equ $ - bot_user_id
 help_response: db '**Hai sayang! Ini cara pakai aku:**\n`Caine <pertanyaan>` - tanya apapun\n`Caine` + kirim gambar - analisis gambar\n`Caine summarize [jumlah]` - rangkum chat\n`Caine report @user alasan` - laporin user\n`Caine reset` - hapus memory\n`Caine afk [alasan]` - set AFK\n`Caine afklist` - lihat siapa yang AFK\n`Caine rank [@user]` - lihat rank/XP\n`Caine leaderboard` - top 10 XP\n`Caine status` - status bot\n`Caine setmodel <alias>` - ganti model AI\n`Caine sethistory <angka>` - set batas history chat\n`/info` - info bot\n`/dashboard` - buka dashboard (admin)\n\n**Moderasi:** kick, ban, unban, timeout, untimeout, warn, warnings, clearwarn, clear, lock, unlock, slowmode, nick, role add/remove\n\n**Admin:** addword, removeword, words, enable, disable, setlog, setwelcome, setgoodbye, setwelcomemsg, setgoodbyemsg, autorole, removeautorole, setlevelchannel, setpersona, setmodel, sethistory'
 help_response_len equ $ - help_response
-status_response: db 'CaineASM is online. Gateway and REST command handling are active.'
+status_uptime_value: db '2d 3h 4m 5s'
+status_uptime_value_len equ $ - status_uptime_value
+status_response: db 0xf0, 0x9f, 0x93, 0x8a, ' **Status Bot**', 10, 0xe2, 0x8f, 0xb1, ' Uptime: 2d 3h 4m 5s', 10, 0xf0, 0x9f, 0x8c, 0x90, ' Servers: 7'
 status_response_len equ $ - status_response
 rank_response: db 'Your XP: 42'
 rank_response_len equ $ - rank_response
