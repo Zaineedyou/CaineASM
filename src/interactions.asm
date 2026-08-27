@@ -561,8 +561,11 @@ interaction_handle_gateway:
     mov r9d, modal_setlog_response_len
     jmp .component_respond_json
 .component_general:
-    lea r8, [dashboard_general_response]
-    mov r9d, dashboard_general_response_len
+    call interaction_build_general_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_general_dynamic]
     jmp .component_respond_json
 .component_back:
     lea r8, [dashboard_back_response]
@@ -928,6 +931,68 @@ interaction_handle_gateway:
     jmp .out
 .ignored:
     xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-7 General Settings response. The sole dynamic fragment is a
+; decimal channel ID rendered as a mention, otherwise a constant safe fallback.
+; RAX=response length or -1 if a bounded output capacity check fails.
+interaction_build_general_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [general_log_unset]
+    mov r15d, general_log_unset_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call decimal_id_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, dashboard_general_prefix_len
+    add eax, r15d
+    add eax, dashboard_general_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_general_dynamic]
+    lea rsi, [dashboard_general_prefix]
+    mov edx, dashboard_general_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_general_dynamic + dashboard_general_prefix_len]
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    lea rdi, [dashboard_general_dynamic + dashboard_general_prefix_len]
+    add rdi, r15
+    lea rsi, [dashboard_general_suffix]
+    mov edx, dashboard_general_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_general_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
 .out:
     pop r15
     pop r14
@@ -2153,6 +2218,12 @@ health_probe_setting: db '__healthcheck_probe__'
 health_probe_setting_len equ $ - health_probe_setting
 health_probe_value: db 'cache_ping'
 health_probe_value_len equ $ - health_probe_value
+general_log_unset: db 'Belum diset'
+general_log_unset_len equ $ - general_log_unset
+dashboard_general_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"'
+dashboard_general_prefix_len equ $ - dashboard_general_prefix
+dashboard_general_suffix: db '"},{"name":"Disabled Channels","value":"Tidak ada atau tidak tercache."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_general_suffix_len equ $ - dashboard_general_suffix
 status_default_history: db '30'
 status_default_history_len equ $ - status_default_history
 dashboard_status_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"'
@@ -2260,3 +2331,4 @@ interaction_word: resb 27
 interaction_word_len: resd 1
 health_probe_reply: resb 1901
 dashboard_status_dynamic: resb DASHBOARD_DYNAMIC_CAP
+dashboard_general_dynamic: resb DASHBOARD_DYNAMIC_CAP

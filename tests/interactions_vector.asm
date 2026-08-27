@@ -77,9 +77,10 @@ _start:
     jne .fail
 
     mov dword [failure_stage], 5
-    lea rax, [dashboard_general_response]
+    mov byte [general_log_mode], 1
+    lea rax, [dashboard_general_dynamic_response]
     mov [expected_json_ptr], rax
-    mov dword [expected_json_len], dashboard_general_response_len
+    mov dword [expected_json_len], dashboard_general_dynamic_response_len
     lea rdi, [dashboard_general_frame]
     mov esi, dashboard_general_frame_len
     call interaction_handle_gateway
@@ -87,6 +88,7 @@ _start:
     jnz .fail
     cmp qword [json_callback_calls], 3
     jne .fail
+    mov byte [general_log_mode], 0
 
     mov dword [failure_stage], 6
     lea rax, [dashboard_welcome_response]
@@ -606,6 +608,12 @@ _start:
 ; Bounded healthcheck seams: no network and no durable store are accessed by
 ; this vector. Dedicated cases below can control their success bits.
 guild_config_get:
+    cmp byte [general_log_mode], 0
+    je .not_general
+    lea rax, [general_log_channel]
+    mov edx, general_log_channel_len
+    ret
+.not_general:
     cmp byte [status_history_mode], 0
     je .health
     lea rax, [history_limit]
@@ -1098,6 +1106,10 @@ healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada kompone
 healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
 status_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"32 messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 status_dynamic_response_len equ $ - status_dynamic_response
+general_log_channel: db '111111111111111111'
+general_log_channel_len equ $ - general_log_channel
+dashboard_general_dynamic_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":5793266,"title":"General Settings","fields":[{"name":"Log Channel ID","value":"111111111111111111"},{"name":"Disabled Channels","value":"Tidak ada atau tidak tercache."}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set Log Channel","custom_id":"dash_setlog"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
+dashboard_general_dynamic_response_len equ $ - dashboard_general_dynamic_response
 health_probe_setting: db '__healthcheck_probe__'
 health_probe_setting_len equ $ - health_probe_setting
 autorole_id: db '444444444444444444'
@@ -1117,6 +1129,7 @@ word_remove_calls: dq 0
 autorole_hierarchy_allowed: db 0
 health_permission_allowed: db 1
 status_history_mode: db 0
+general_log_mode: db 0
 health_edit_calls: dq 0
 gateway_bot_user_id: db '998877665544332211'
 gateway_bot_user_id_len: dd 18
