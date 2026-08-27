@@ -23,6 +23,7 @@ global discord_token_len
 extern gateway_bot_user_id
 extern gateway_bot_user_id_len
 extern gateway_guild_name_get
+extern gateway_guild_member_count_get
 extern gateway_guild_count
 extern gateway_uptime_format
 
@@ -165,6 +166,13 @@ _start:
     call equal_bytes
     test al, al
     jz .fail
+    mov dword [failure_stage], 661
+    lea rdi, [cached_guild_id]
+    mov esi, cached_guild_id_len
+    call gateway_guild_member_count_get
+    jc .fail
+    cmp eax, 42
+    jne .fail
     mov dword [failure_stage], 66
     call gateway_guild_count
     cmp eax, 1
@@ -203,6 +211,11 @@ _start:
     call gateway_guild_name_get
     test rax, rax
     jnz .fail
+    mov dword [failure_stage], 691
+    lea rdi, [cached_guild_id]
+    mov esi, cached_guild_id_len
+    call gateway_guild_member_count_get
+    jnc .fail
 
     ; MESSAGE_CREATE is dispatched only after its Gateway type is recognized.
     mov dword [failure_stage], 61
@@ -530,7 +543,7 @@ interaction_frame: db '{"op":0,"s":431,"t":"INTERACTION_CREATE","d":{"id":"11223
 interaction_frame_len equ $ - interaction_frame
 reconnect_frame: db '{"op":7,"d":null}'
 reconnect_frame_len equ $ - reconnect_frame
-guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","name":"Guild \"A\"","owner_id":"9001","roles":[]}}'
+guild_create_frame: db '{"op":0,"s":44,"t":"GUILD_CREATE","d":{"id":"1001","name":"Guild \"A\"","member_count":42,"owner_id":"9001","roles":[]}}'
 guild_create_frame_len equ $ - guild_create_frame
 guild_delete_frame: db '{"op":0,"s":441,"t":"GUILD_DELETE","d":{"id":"1001"}}'
 guild_delete_frame_len equ $ - guild_delete_frame

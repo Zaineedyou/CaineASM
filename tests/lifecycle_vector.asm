@@ -8,6 +8,8 @@ global _start
 global guild_config_get
 global discord_send_text
 global discord_add_member_role
+global gateway_guild_name_get
+global gateway_guild_member_count_get
 
 %define SYS_EXIT 60
 
@@ -40,8 +42,25 @@ _start:
     jnz .fail
     cmp dword [send_calls], 2
     jne .fail
-    cmp dword [role_calls], 1
+
+    ; A cache miss mirrors source State fallback: blank server name and zero
+    ; members, without failing configured lifecycle delivery.
+    mov dword [failure_stage], 4
+    mov dword [mode], 1
+    mov dword [cache_available], 0
+    lea rax, [welcome_cache_miss_expected]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], welcome_cache_miss_expected_len
+    lea rdi, [member_add_event]
+    mov esi, member_add_event_len
+    call lifecycle_member_add
+    test eax, eax
+    jnz .fail
+    cmp dword [send_calls], 3
     jne .fail
+    cmp dword [role_calls], 2
+    jne .fail
+    mov dword [cache_available], 1
 
     ; Missing configured destination performs no send and is not an error.
     mov dword [mode], 3
@@ -50,7 +69,7 @@ _start:
     call lifecycle_member_add
     test eax, eax
     jnz .fail
-    cmp dword [send_calls], 2
+    cmp dword [send_calls], 3
     jne .fail
 
     mov eax, SYS_EXIT
@@ -60,6 +79,44 @@ _start:
     mov eax, SYS_EXIT
     mov edi, [failure_stage]
     syscall
+
+; RDI=guild, ESI=len. RAX=name and EDX=len from the fixed Gateway cache seam.
+gateway_guild_name_get:
+    cmp dword [cache_available], 1
+    jne .miss
+    cmp esi, guild_id_len
+    jne .miss
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .miss
+    lea rax, [cached_guild_name]
+    mov edx, cached_guild_name_len
+    ret
+.miss:
+    xor eax, eax
+    xor edx, edx
+    ret
+
+; RDI=guild, ESI=len. EAX=count and CF=0 on cache hit; CF=1 on miss.
+gateway_guild_member_count_get:
+    cmp dword [cache_available], 1
+    jne .miss
+    cmp esi, guild_id_len
+    jne .miss
+    lea rsi, [guild_id]
+    mov edx, guild_id_len
+    call equal_bytes
+    test al, al
+    jz .miss
+    mov eax, 42
+    clc
+    ret
+.miss:
+    xor eax, eax
+    stc
+    ret
 
 ; RDI=guild, ESI=len, RDX=setting, ECX=len. RAX=value, EDX=len.
 guild_config_get:
@@ -214,13 +271,18 @@ goodbye_channel_len equ 15
 welcome_message_len equ 11
 welcome_template: db 'Hi {user} {username} {server} {count}'
 welcome_template_len equ $ - welcome_template
-welcome_expected: db 'Hi <@u1> Alice this server ?'
+cached_guild_name: db 'Guild Cache'
+cached_guild_name_len equ $ - cached_guild_name
+welcome_expected: db 'Hi <@u1> Alice Guild Cache 42'
 welcome_expected_len equ $ - welcome_expected
-goodbye_expected: db 'Selamat tinggal **Alice** dari **this server**.'
+goodbye_expected: db 'Selamat tinggal **Alice** dari **Guild Cache**.'
 goodbye_expected_len equ $ - goodbye_expected
+welcome_cache_miss_expected: db 'Hi <@u1> Alice  0'
+welcome_cache_miss_expected_len equ $ - welcome_cache_miss_expected
 
 section .data
 mode: dd 0
+cache_available: dd 1
 send_calls: dd 0
 role_calls: dd 0
 expected_text_ptr: dq 0

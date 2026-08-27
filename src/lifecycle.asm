@@ -9,6 +9,8 @@ extern json_read_string
 extern guild_config_get
 extern discord_send_text
 extern discord_add_member_role
+extern gateway_guild_name_get
+extern gateway_guild_member_count_get
 
 %define ID_CAP 64
 %define NAME_CAP 128
@@ -71,6 +73,8 @@ lifecycle_handle:
     test eax, eax
     jle .done
     mov [guild_id_len], eax
+    mov dword [server_name_len], 0
+    mov dword [member_count], 0
 
     ; The first generic id in GUILD_MEMBER_ADD/REMOVE is user.id.
     mov rdi, r12
@@ -89,6 +93,30 @@ lifecycle_handle:
     jle .done
     mov [user_id_len], eax
 
+    ; Gateway-owned presentation cache provides the same guild name and member
+    ; count source State would expose, without an extra REST request.
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call gateway_guild_name_get
+    test rax, rax
+    jz .member_count
+    test edx, edx
+    jle .member_count
+    cmp edx, NAME_CAP - 1
+    ja .member_count
+    mov rbx, rax
+    lea rdi, [server_name]
+    mov esi, edx
+    mov rdx, rbx
+    call copy_bytes
+    mov [server_name_len], esi
+.member_count:
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    call gateway_guild_member_count_get
+    jc .cache_ready
+    mov [member_count], eax
+.cache_ready:
     cmp dword [member_add_mode], 1
     jne .username
     lea rdi, [guild_id]
@@ -258,6 +286,16 @@ render_template:
     call literal_at
     test al, al
     jz .count
+    cmp dword [server_name_len], 0
+    jle .server_fallback
+    lea rdi, [server_name]
+    mov esi, [server_name_len]
+    call append_sanitized
+    test eax, eax
+    js .bad
+    add r14d, placeholder_server_len
+    jmp .loop
+.server_fallback:
     lea rdi, [fallback_server]
     mov esi, fallback_server_len
     call append_bytes
@@ -272,9 +310,8 @@ render_template:
     call literal_at
     test al, al
     jz .literal
-    lea rdi, [fallback_count]
-    mov esi, fallback_count_len
-    call append_bytes
+    mov eax, [member_count]
+    call append_uint32
     test eax, eax
     js .bad
     add r14d, placeholder_count_len
@@ -376,6 +413,39 @@ append_sanitized:
     pop r12
     ret
 
+; EAX=unsigned member count. EAX=0/-1 after bounded decimal append.
+append_uint32:
+    push rbx
+    push r12
+    mov ebx, eax
+    lea r12, [uint_scratch + 10]
+    xor ecx, ecx
+    test ebx, ebx
+    jnz .digits
+    dec r12
+    mov byte [r12], '0'
+    mov ecx, 1
+    jmp .append
+.digits:
+    mov eax, ebx
+    xor edx, edx
+    mov esi, 10
+    div esi
+    dec r12
+    add dl, '0'
+    mov [r12], dl
+    inc ecx
+    mov ebx, eax
+    test ebx, ebx
+    jnz .digits
+.append:
+    mov rdi, r12
+    mov esi, ecx
+    call append_bytes
+    pop r12
+    pop rbx
+    ret
+
 ; EDI=byte. EAX=0/-1.
 append_byte:
     mov eax, [output_len]
@@ -436,10 +506,8 @@ mention_prefix: db '<@'
 mention_prefix_len equ $ - mention_prefix
 mention_suffix: db '>'
 mention_suffix_len equ $ - mention_suffix
-fallback_server: db 'this server'
+fallback_server:
 fallback_server_len equ $ - fallback_server
-fallback_count: db '?'
-fallback_count_len equ $ - fallback_count
 
 section .data
 guild_id_len: dd 0
@@ -456,6 +524,8 @@ member_add_mode: dd 0
 auto_role_ptr: dq 0
 auto_role_len: dd 0
 output_len: dd 0
+server_name_len: dd 0
+member_count: dd 0
 
 section .bss
 guild_id: resb ID_CAP
@@ -463,3 +533,5 @@ user_id: resb ID_CAP
 username: resb NAME_CAP
 channel_id: resb ID_CAP
 output: resb OUTPUT_CAP
+server_name: resb NAME_CAP
+uint_scratch: resb 10

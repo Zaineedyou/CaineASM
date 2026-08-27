@@ -8,6 +8,7 @@ global gateway_bot_user_id
 global gateway_bot_user_id_len
 global gateway_last_heartbeat_latency_ms
 global gateway_guild_name_get
+global gateway_guild_member_count_get
 global gateway_uptime_format
 global gateway_guild_count
 
@@ -531,6 +532,22 @@ gateway_cache_guild_name:
     call gateway_guild_name_valid
     test al, al
     jz .bad
+    mov dword [guild_cache_member_count_scratch], 0
+    mov rdi, rbx
+    mov rsi, r14
+    lea rdx, [key_member_count]
+    mov ecx, key_member_count_len
+    call json_object_find_direct_key
+    test rax, rax
+    jz .find_slot
+    mov rdi, rax
+    mov rsi, r14
+    call json_read_uint
+    jc .find_slot
+    mov rdx, 0xffffffff
+    cmp rax, rdx
+    ja .find_slot
+    mov [guild_cache_member_count_scratch], eax
 
     xor ebx, ebx
     mov r15d, -1
@@ -585,6 +602,8 @@ gateway_cache_guild_name:
     mov [guild_cache_id_lens + r15 * 4], eax
     mov eax, [guild_cache_name_scratch_len]
     mov [guild_cache_name_lens + r15 * 4], eax
+    mov eax, [guild_cache_member_count_scratch]
+    mov [guild_cache_member_counts + r15 * 4], eax
     xor eax, eax
     jmp .out
 .bad:
@@ -661,6 +680,7 @@ gateway_cache_guild_remove:
     jz .next
     mov dword [guild_cache_id_lens + rbx * 4], 0
     mov dword [guild_cache_name_lens + rbx * 4], 0
+    mov dword [guild_cache_member_counts + rbx * 4], 0
     xor eax, eax
     jmp .out
 .next:
@@ -692,6 +712,47 @@ gateway_guild_count:
     inc ecx
     jmp .loop
 .done:
+    ret
+
+; RDI=guild decimal ID, ESI=len. EAX=member count with CF=0 only for an exact
+; cache hit; CF=1 signals a miss. A zero count is therefore a valid cache value.
+gateway_guild_member_count_get:
+    push rbx
+    push r12
+    push r13
+    test rdi, rdi
+    jz .miss
+    test esi, esi
+    jle .miss
+    mov r12, rdi
+    mov ebx, esi
+    xor r13d, r13d
+.loop:
+    cmp r13d, GUILD_CACHE_SLOTS
+    jae .miss
+    cmp dword [guild_cache_id_lens + r13 * 4], ebx
+    jne .next
+    mov rax, r13
+    imul rax, GUILD_ID_CAP
+    lea rdi, [guild_cache_ids + rax]
+    mov rsi, r12
+    mov edx, ebx
+    call gateway_equal_bytes
+    test al, al
+    jz .next
+    mov eax, [guild_cache_member_counts + r13 * 4]
+    clc
+    jmp .out
+.next:
+    inc r13d
+    jmp .loop
+.miss:
+    xor eax, eax
+    stc
+.out:
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; RDI=guild decimal ID, ESI=len. RAX=name pointer and EDX=name length only for
@@ -1324,6 +1385,7 @@ gateway_reset_state:
     jae .cache_cleared
     mov dword [guild_cache_id_lens + rcx * 4], 0
     mov dword [guild_cache_name_lens + rcx * 4], 0
+    mov dword [guild_cache_member_counts + rcx * 4], 0
     inc ecx
     jmp .clear_guild_cache
 .cache_cleared:
@@ -1364,6 +1426,8 @@ key_id: db 'id'
 key_id_len equ $ - key_id
 key_name: db 'name'
 key_name_len equ $ - key_name
+key_member_count: db 'member_count'
+key_member_count_len equ $ - key_member_count
 event_ready: db 'READY'
 event_ready_len equ $ - event_ready
 event_resumed: db 'RESUMED'
@@ -1436,7 +1500,9 @@ guild_cache_id_scratch: resb GUILD_ID_CAP
 guild_cache_id_scratch_len: resd 1
 guild_cache_name_scratch: resb GUILD_NAME_CAP
 guild_cache_name_scratch_len: resd 1
+guild_cache_member_count_scratch: resd 1
 guild_cache_ids: resb GUILD_CACHE_SLOTS * GUILD_ID_CAP
 guild_cache_id_lens: resd GUILD_CACHE_SLOTS
 guild_cache_names: resb GUILD_CACHE_SLOTS * GUILD_NAME_CAP
 guild_cache_name_lens: resd GUILD_CACHE_SLOTS
+guild_cache_member_counts: resd GUILD_CACHE_SLOTS
