@@ -2066,7 +2066,7 @@ config_failure_response: db 'Konfigurasi tidak dapat disimpan.'
 config_failure_response_len equ $ - config_failure_response
 healthcheck_deferred_response: db '{"type":5,"data":{"flags":64}}'
 healthcheck_deferred_response_len equ $ - healthcheck_deferred_response
-healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal","fields":[{"name":"Database (SQLite)","value":"Read/write OK","inline":true},{"name":"In-memory Cache","value":"Hit/invalidate OK","inline":true},{"name":"Groq API","value":"Probe respons OK","inline":true},{"name":"Bot Permissions","value":"Permission cache OK","inline":true},{"name":"Discord Latency","value":"Heartbeat ACK <= 500ms","inline":true}]}]}'
+healthcheck_ok_edit: db '{"embeds":[{"color":65416,"title":"Semua sistem normal","fields":[{"name":"State Storage","value":"Read/write OK","inline":true},{"name":"In-memory Cache","value":"Hit/invalidate OK","inline":true},{"name":"Groq API","value":"Probe respons OK","inline":true},{"name":"Bot Permissions","value":"Permission cache OK","inline":true},{"name":"Discord Latency","value":"Heartbeat ACK <= 500ms","inline":true}]}]}'
 healthcheck_ok_edit_len equ $ - healthcheck_ok_edit
 healthcheck_degraded_edit: db '{"embeds":[{"color":16729156,"title":"Ada komponen bermasalah","description":"Satu atau lebih probe bounded gagal atau cache belum lengkap. Periksa konfigurasi dan coba lagi."}]}'
 healthcheck_degraded_edit_len equ $ - healthcheck_degraded_edit
