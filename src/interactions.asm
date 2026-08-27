@@ -519,8 +519,11 @@ interaction_handle_gateway:
     mov r9d, persona_reset_response_len
     jmp .respond
 .component_sethistory:
-    lea r8, [modal_sethistory_response]
-    mov r9d, modal_sethistory_response_len
+    call interaction_build_history_modal_response
+    test eax, eax
+    js .component_config_failure
+    mov r9d, eax
+    lea r8, [dashboard_history_modal_dynamic]
     jmp .component_respond_json
 .component_status:
     call interaction_build_status_response
@@ -959,6 +962,68 @@ interaction_handle_gateway:
     jmp .out
 .ignored:
     xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Builds a type-9 History Limit modal with the current accepted guild value.
+; Only exact decimal 5..100 values are included; invalid/missing state falls
+; back to 30. RAX=response length or -1 on an impossible fixed-buffer overflow.
+interaction_build_history_modal_response:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    lea r12, [status_default_history]
+    mov r15d, status_default_history_len
+    lea rdi, [interaction_guild_id]
+    mov esi, [interaction_guild_id_len]
+    lea rdx, [setting_history]
+    mov ecx, setting_history_len
+    call guild_config_get
+    test rax, rax
+    jz .build
+    test edx, edx
+    jle .build
+    mov r13, rax
+    mov r14d, edx
+    mov rdi, r13
+    mov esi, r14d
+    call interaction_history_valid
+    test al, al
+    jz .build
+    mov r12, r13
+    mov r15d, r14d
+.build:
+    mov eax, dashboard_history_modal_prefix_len
+    add eax, r15d
+    add eax, dashboard_history_modal_suffix_len
+    cmp eax, DASHBOARD_DYNAMIC_CAP - 1
+    ja .bad
+    mov ebx, eax
+    lea rdi, [dashboard_history_modal_dynamic]
+    lea rsi, [dashboard_history_modal_prefix]
+    mov edx, dashboard_history_modal_prefix_len
+    call interaction_copy_bytes
+    lea rdi, [dashboard_history_modal_dynamic + dashboard_history_modal_prefix_len]
+    mov rsi, r12
+    mov edx, r15d
+    call interaction_copy_bytes
+    lea rdi, [dashboard_history_modal_dynamic + dashboard_history_modal_prefix_len]
+    add rdi, r15
+    lea rsi, [dashboard_history_modal_suffix]
+    mov edx, dashboard_history_modal_suffix_len
+    call interaction_copy_bytes
+    mov byte [dashboard_history_modal_dynamic + rbx], 0
+    mov eax, ebx
+    jmp .out
+.bad:
+    mov eax, -1
 .out:
     pop r15
     pop r14
@@ -3131,6 +3196,10 @@ dashboard_general_suffix: db '"},{"name":"Disabled Channels","value":"Tidak ada 
 dashboard_general_suffix_len equ $ - dashboard_general_suffix
 status_default_history: db '30'
 status_default_history_len equ $ - status_default_history
+dashboard_history_modal_prefix: db '{"type":9,"data":{"custom_id":"modal_sethistory","title":"Set History Limit","components":[{"type":1,"components":[{"type":4,"custom_id":"limit","label":"Limit History (5-100)","style":1,"required":true,"placeholder":"Contoh: 15","max_length":3,"value":"'
+dashboard_history_modal_prefix_len equ $ - dashboard_history_modal_prefix
+dashboard_history_modal_suffix: db '"}]}]}}'
+dashboard_history_modal_suffix_len equ $ - dashboard_history_modal_suffix
 dashboard_status_prefix: db '{"type":7,"data":{"flags":64,"embeds":[{"color":65416,"title":"Status Bot","fields":[{"name":"Status","value":"Online"},{"name":"History Limit","value":"'
 dashboard_status_prefix_len equ $ - dashboard_status_prefix
 dashboard_status_suffix: db ' messages"}]}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Set History Limit","custom_id":"dash_sethistory"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
@@ -3246,3 +3315,4 @@ dashboard_persona_modal_dynamic: resb DASHBOARD_PERSONA_DYNAMIC_CAP
 dashboard_moderation_dynamic: resb DASHBOARD_MODERATION_DYNAMIC_CAP
 dashboard_words_raw: resb DASHBOARD_WORDS_CAP
 dashboard_words_inline: resb DASHBOARD_WORDS_CAP
+dashboard_history_modal_dynamic: resb DASHBOARD_DYNAMIC_CAP

@@ -279,6 +279,33 @@ _start:
     mov byte [moderation_dashboard_mode], 0
 
     mov dword [failure_stage], 20
+    mov byte [status_history_mode], 1
+    lea rax, [dashboard_history_modal_32_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_history_modal_32_response_len
+    lea rdi, [dashboard_sethistory_frame]
+    mov esi, dashboard_sethistory_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 18
+    jne .fail
+
+    mov dword [failure_stage], 21
+    mov byte [status_history_mode], 2
+    lea rax, [dashboard_history_modal_30_response]
+    mov [expected_json_ptr], rax
+    mov dword [expected_json_len], dashboard_history_modal_30_response_len
+    lea rdi, [dashboard_sethistory_frame]
+    mov esi, dashboard_sethistory_frame_len
+    call interaction_handle_gateway
+    test eax, eax
+    jnz .fail
+    cmp qword [json_callback_calls], 19
+    jne .fail
+    mov byte [status_history_mode], 0
+
+    mov dword [failure_stage], 22
     lea rax, [model_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], model_guild_id_len
@@ -361,10 +388,10 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 18
+    cmp qword [json_callback_calls], 20
     jne .fail
 
-    mov dword [failure_stage], 20
+    mov dword [failure_stage], 22
     lea rax, [modal_guild_id]
     mov [expected_config_guild_ptr], rax
     mov dword [expected_config_guild_len], modal_guild_id_len
@@ -638,7 +665,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 2
     jne .fail
-    cmp qword [json_callback_calls], 19
+    cmp qword [json_callback_calls], 21
     jne .fail
     cmp qword [health_edit_calls], 1
     jne .fail
@@ -668,7 +695,7 @@ _start:
     jne .fail
     cmp qword [config_delete_calls], 3
     jne .fail
-    cmp qword [json_callback_calls], 20
+    cmp qword [json_callback_calls], 22
     jne .fail
     cmp qword [health_edit_calls], 2
     jne .fail
@@ -684,7 +711,7 @@ _start:
     call interaction_handle_gateway
     test eax, eax
     jnz .fail
-    cmp qword [json_callback_calls], 21
+    cmp qword [json_callback_calls], 23
     jne .fail
     mov byte [status_history_mode], 0
 
@@ -717,7 +744,7 @@ _start:
     jnz .fail
     cmp qword [callback_calls], 21
     jne .fail
-    cmp qword [json_callback_calls], 21
+    cmp qword [json_callback_calls], 23
     jne .fail
 
     mov dword [failure_stage], 31
@@ -934,8 +961,14 @@ guild_config_get:
 .not_general:
     cmp byte [status_history_mode], 0
     je .health
+    cmp byte [status_history_mode], 1
+    jne .invalid_history
     lea rax, [history_limit]
     mov edx, history_limit_len
+    jmp .out
+.invalid_history:
+    lea rax, [invalid_history_limit]
+    mov edx, invalid_history_limit_len
     jmp .out
 .health:
     lea rax, [health_probe_value]
@@ -1331,6 +1364,8 @@ dashboard_setpersona_frame: db '{"op":0,"s":31,"t":"INTERACTION_CREATE","d":{"id
 dashboard_setpersona_frame_len equ $ - dashboard_setpersona_frame
 dashboard_moderation_frame: db '{"op":0,"s":32,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_moderation","component_type":2}}}'
 dashboard_moderation_frame_len equ $ - dashboard_moderation_frame
+dashboard_sethistory_frame: db '{"op":0,"s":33,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_sethistory","component_type":2}}}'
+dashboard_sethistory_frame_len equ $ - dashboard_sethistory_frame
 dashboard_model_llama_frame: db '{"op":0,"s":9,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_llama70b","component_type":2}}}'
 dashboard_model_llama_frame_len equ $ - dashboard_model_llama_frame
 dashboard_model_gpt120_frame: db '{"op":0,"s":10,"t":"INTERACTION_CREATE","d":{"id":"112233445566778899","token":"abc_DEF-123.token","type":3,"guild_id":"1","member":{"permissions":"8","user":{"id":"admin-1"}},"data":{"custom_id":"dash_model_gpt120b","component_type":2}}}'
@@ -1420,6 +1455,10 @@ moderation_words_raw: db 'Banned words:', 10, '- spoiler', 10, '- alpha', 10
 moderation_words_raw_len equ $ - moderation_words_raw
 moderation_empty_raw: db 'Banned words:', 10, '(none)', 10
 moderation_empty_raw_len equ $ - moderation_empty_raw
+dashboard_history_modal_32_response: db '{"type":9,"data":{"custom_id":"modal_sethistory","title":"Set History Limit","components":[{"type":1,"components":[{"type":4,"custom_id":"limit","label":"Limit History (5-100)","style":1,"required":true,"placeholder":"Contoh: 15","max_length":3,"value":"32"}]}]}}'
+dashboard_history_modal_32_response_len equ $ - dashboard_history_modal_32_response
+dashboard_history_modal_30_response: db '{"type":9,"data":{"custom_id":"modal_sethistory","title":"Set History Limit","components":[{"type":1,"components":[{"type":4,"custom_id":"limit","label":"Limit History (5-100)","style":1,"required":true,"placeholder":"Contoh: 15","max_length":3,"value":"30"}]}]}}'
+dashboard_history_modal_30_response_len equ $ - dashboard_history_modal_30_response
 dashboard_model_response: db '{"type":7,"data":{"flags":64,"embeds":[{"color":49151,"title":"Model AI","description":"Pilih model aktif."}],"components":[{"type":1,"components":[{"type":2,"style":1,"label":"Llama 3.3 70B","custom_id":"dash_model_llama70b"},{"type":2,"style":2,"label":"GPT OSS 120B","custom_id":"dash_model_gpt120b"},{"type":2,"style":2,"label":"GPT OSS 20B","custom_id":"dash_model_gpt20b"},{"type":2,"style":2,"label":"Qwen 32B","custom_id":"dash_model_qwen32b"}]},{"type":1,"components":[{"type":2,"style":2,"label":"Kembali","custom_id":"dash_back"}]}]}}'
 dashboard_model_response_len equ $ - dashboard_model_response
 modal_setlog_response: db '{"type":9,"data":{"custom_id":"modal_setlog","title":"Set Log Channel","components":[{"type":1,"components":[{"type":4,"custom_id":"channel_id","label":"Channel ID","style":1,"required":true,"placeholder":"Contoh: 1234567890123456789"}]}]}}'
@@ -1502,6 +1541,8 @@ persona_value: db 'Kamu adalah asisten ramah.'
 persona_value_len equ $ - persona_value
 history_limit: db '32'
 history_limit_len equ $ - history_limit
+invalid_history_limit: db '101'
+invalid_history_limit_len equ $ - invalid_history_limit
 levelchannel_saved_response: db 'Level-up channel diset.'
 levelchannel_saved_response_len equ $ - levelchannel_saved_response
 persona_saved_response: db 'Persona diupdate.'
