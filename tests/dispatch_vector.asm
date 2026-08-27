@@ -506,7 +506,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [config_get_calls], 2
+    cmp qword [config_get_calls], 3
     jne .fail
     cmp qword [send_calls], 24
     jne .fail
@@ -518,7 +518,7 @@ _start:
     call dispatch_message_create
     test eax, eax
     jnz .fail
-    cmp qword [config_get_calls], 3
+    cmp qword [config_get_calls], 4
     jne .fail
     cmp qword [send_calls], 25
     jne .fail
@@ -1519,7 +1519,7 @@ _start:
     jnz .fail
     cmp qword [delete_calls], 2
     jne .fail
-    cmp qword [config_get_calls], 9
+    cmp qword [config_get_calls], 13
     jne .fail
     cmp qword [send_calls], 75
     jne .fail
@@ -1538,7 +1538,7 @@ _start:
     jnz .fail
     cmp qword [delete_calls], 3
     jne .fail
-    cmp qword [config_get_calls], 10
+    cmp qword [config_get_calls], 14
     jne .fail
     cmp qword [send_calls], 76
     jne .fail
@@ -1560,9 +1560,32 @@ _start:
     jnz .fail
     cmp qword [groq_calls], 4
     jne .fail
-    cmp qword [config_get_calls], 11
+    cmp qword [config_get_calls], 15
     jne .fail
     cmp qword [send_calls], 78
+    jne .fail
+
+    mov dword [failure_stage], 77
+    mov dword [target_mode], TARGET_VALID
+    mov byte [hierarchy_allowed], 1
+    mov byte [bot_permission_enabled], 1
+    lea rax, [report_log_channel_value]
+    mov [expected_channel_ptr], rax
+    mov dword [expected_channel_len], report_log_channel_value_len
+    mov dword [mod_followup_enabled], 1
+    lea rax, [mod_audit_log]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], mod_audit_log_len
+    lea rdi, [kick_target_event]
+    mov esi, kick_target_event_len
+    call dispatch_message_create
+    test eax, eax
+    jnz .fail
+    cmp qword [kick_calls], 2
+    jne .fail
+    cmp qword [config_get_calls], 16
+    jne .fail
+    cmp qword [send_calls], 80
     jne .fail
 
     mov dword [target_mode], TARGET_NONE
@@ -2654,7 +2677,7 @@ discord_send_text:
     jmp .ok
 .chat_followup:
     cmp dword [chat_followup_enabled], 0
-    je .report_followup
+    je .mod_followup
     mov dword [chat_followup_enabled], 0
     lea rax, [report_log_channel_value]
     mov [expected_channel_ptr], rax
@@ -2662,6 +2685,16 @@ discord_send_text:
     lea rax, [chat_audit_log]
     mov [expected_text_ptr], rax
     mov dword [expected_text_len], chat_audit_log_len
+    jmp .ok
+.mod_followup:
+    cmp dword [mod_followup_enabled], 0
+    je .report_followup
+    mov dword [mod_followup_enabled], 0
+    mov qword [expected_channel_ptr], 0
+    mov dword [expected_channel_len], 0
+    lea rax, [kick_success_response]
+    mov [expected_text_ptr], rax
+    mov dword [expected_text_len], kick_success_response_len
     jmp .ok
 .report_followup:
     cmp dword [report_followup_enabled], 0
@@ -3010,6 +3043,8 @@ automod_audit_log: db 'AUTOMOD', 10, 'User: Alice@', 0xe2, 0x80, 0x8b, 'everyone
 automod_audit_log_len equ $ - automod_audit_log
 chat_audit_log: db 'CHAT', 10, 'User: Chat@', 0xe2, 0x80, 0x8b, 'all', 10, 'Channel: <#123456789012345678>', 10, 'Pertanyaan: ping @', 0xe2, 0x80, 0x8b, 'here?', 39, 'tag', 39, 10, 'Jawaban: AI summary'
 chat_audit_log_len equ $ - chat_audit_log
+mod_audit_log: db 'MODERATION', 10, 'Action: Kick', 10, 'Moderator: user-2', 10, 'Target: 555', 10, 'Alasan: policy reason'
+mod_audit_log_len equ $ - mod_audit_log
 blocked_word: db 'blocked'
 blocked_word_len equ $ - blocked_word
 automod_message_id: db '998877665544332211'
@@ -3069,6 +3104,7 @@ expected_channel_len: dd 0
 report_followup_enabled: dd 0
 automod_followup_enabled: dd 0
 chat_followup_enabled: dd 0
+mod_followup_enabled: dd 0
 report_log_enabled: dd 0
 delete_calls: dq 0
 clear_get_calls: dq 0

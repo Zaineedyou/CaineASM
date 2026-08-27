@@ -1115,13 +1115,27 @@ dispatch_message_create:
     test eax, eax
     jle .warn_usage
     mov [warning_target_len], eax
+    mov rdi, [dispatch_tail_ptr]
+    mov esi, [dispatch_tail_len]
+    call dispatch_tail_after_mention
+    mov [moderation_reason_ptr], rdi
+    mov [moderation_reason_len], esi
     lea rdi, [guild_id]
     mov esi, [guild_id_len]
     lea rdx, [config_value]
-    mov ecx, eax
+    mov ecx, [warning_target_len]
     call warnings_add
     test eax, eax
     js .policy_error
+    mov ebx, eax
+    lea rdi, [mod_action_warn]
+    mov esi, mod_action_warn_len
+    lea rdx, [config_value]
+    mov ecx, [warning_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
+    call dispatch_log_moderation
+    mov eax, ebx
     lea rdi, [warning_reply + warning_reply_prefix_len]
     call format_uint32
     mov ebx, eax
@@ -1225,6 +1239,13 @@ dispatch_message_create:
     call discord_kick_member
     test eax, eax
     jnz .moderation_error
+    lea rdi, [mod_action_kick]
+    mov esi, mod_action_kick_len
+    lea rdx, [config_value]
+    mov ecx, [moderation_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
+    call dispatch_log_moderation
     lea rdi, [kick_success_response]
     mov esi, kick_success_response_len
     jmp .reply
@@ -1327,6 +1348,13 @@ dispatch_message_create:
     call discord_set_member_timeout
     test eax, eax
     jnz .moderation_error
+    lea rdi, [mod_action_timeout]
+    mov esi, mod_action_timeout_len
+    lea rdx, [timeout_target]
+    mov ecx, [timeout_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
+    call dispatch_log_moderation
     lea rdi, [timeout_success_response]
     mov esi, timeout_success_response_len
     jmp .reply
@@ -1511,6 +1539,13 @@ dispatch_message_create:
     call discord_ban_member
     test eax, eax
     jnz .moderation_error
+    lea rdi, [mod_action_ban]
+    mov esi, mod_action_ban_len
+    lea rdx, [config_value]
+    mov ecx, [moderation_target_len]
+    mov r8, [moderation_reason_ptr]
+    mov r9d, [moderation_reason_len]
+    call dispatch_log_moderation
     lea rdi, [ban_success_response]
     mov esi, ban_success_response_len
     jmp .reply
@@ -1541,6 +1576,13 @@ dispatch_message_create:
     call discord_unban_member
     test eax, eax
     jnz .moderation_error
+    lea rdi, [mod_action_unban]
+    mov esi, mod_action_unban_len
+    lea rdx, [argument_buffer]
+    mov ecx, [config_value_len]
+    lea r8, [mod_reason_dash]
+    mov r9d, mod_reason_dash_len
+    call dispatch_log_moderation
     lea rdi, [unban_success_response]
     mov esi, unban_success_response_len
     jmp .reply
@@ -3295,8 +3337,8 @@ dispatch_parse_role_command:
     pop rbx
     ret
 ; RDI=tail bytes, ESI=len. EAX=minutes (1..40320), or -1. Accepts only
-; `<@user> <minutes> [reason]` in that order; reason is intentionally ignored
-; by timeout REST because it has no source API payload field.
+; `<@user> <minutes> [reason]` in that order; reason is excluded from timeout
+; REST because that endpoint has no reason field, but retained for bounded audit.
 dispatch_parse_timeout_command:
     push rbx
     push r12
@@ -3305,6 +3347,8 @@ dispatch_parse_timeout_command:
     mov r12, rdi
     mov r13d, esi
     mov dword [timeout_target_len], 0
+    mov qword [moderation_reason_ptr], 0
+    mov dword [moderation_reason_len], 0
     test r12, r12
     jz .bad
     test r13d, r13d
@@ -3389,14 +3433,34 @@ dispatch_parse_timeout_command:
     test eax, eax
     jz .bad
     cmp dl, ' '
-    je .ok
+    je .reason_skip_ws
     cmp dl, 9
-    je .ok
+    je .reason_skip_ws
     cmp dl, 10
-    je .ok
+    je .reason_skip_ws
     cmp dl, 13
     jne .bad
-.ok:
+.reason_skip_ws:
+    cmp ebx, r13d
+    jae .out
+    mov dl, [r12 + rbx]
+    cmp dl, ' '
+    je .reason_advance
+    cmp dl, 9
+    je .reason_advance
+    cmp dl, 10
+    je .reason_advance
+    cmp dl, 13
+    jne .reason_ready
+.reason_advance:
+    inc ebx
+    jmp .reason_skip_ws
+.reason_ready:
+    lea rdx, [r12 + rbx]
+    mov [moderation_reason_ptr], rdx
+    mov edx, r13d
+    sub edx, ebx
+    mov [moderation_reason_len], edx
     jmp .out
 .minutes_done:
     test r14d, r14d
@@ -4276,6 +4340,132 @@ dispatch_log_chat:
     pop rbx
     ret
 
+; RDI=action/ESI=len, RDX=target/ECX=len, R8=reason/R9D=len. Sends a bounded
+; moderation audit only after a successful local moderation action. Configuration
+; errors, malformed IDs, and audit delivery failures remain best-effort.
+dispatch_log_moderation:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 32
+    mov rbx, rdi
+    mov r12d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [rsp], r8
+    mov dword [rsp + 8], r9d
+    cmp dword [guild_id_len], 0
+    jle .out
+    test rbx, rbx
+    jz .out
+    test r12d, r12d
+    jle .out
+    test r14, r14
+    jz .out
+    test r15d, r15d
+    jle .out
+    lea rdi, [guild_id]
+    mov esi, [guild_id_len]
+    lea rdx, [setting_log_channel]
+    mov ecx, setting_log_channel_len
+    call guild_config_get
+    test rax, rax
+    jz .out
+    test edx, edx
+    jle .out
+    cmp edx, CHANNEL_ID_CAP - 1
+    ja .out
+    mov r13d, edx
+    mov [rsp + 16], rax
+    mov rdi, rax
+    mov esi, r13d
+    call dispatch_is_nonzero_decimal_identifier
+    test al, al
+    jz .out
+    lea rdi, [report_log_channel]
+    mov rsi, [rsp + 16]
+    mov edx, r13d
+    call copy_bytes
+    mov dword [report_log_len], 0
+    lea rdi, [mod_log_prefix]
+    mov esi, mod_log_prefix_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov rdi, rbx
+    mov esi, r12d
+    call report_append_bytes
+    test eax, eax
+    js .out
+    lea rdi, [mod_log_moderator_label]
+    mov esi, mod_log_moderator_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    cmp dword [author_name_len], 0
+    jg .moderator_name
+    lea rdi, [author_id]
+    mov esi, [author_id_len]
+    jmp .moderator_append
+.moderator_name:
+    lea rdi, [author_name]
+    mov esi, [author_name_len]
+.moderator_append:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [mod_log_target_label]
+    mov esi, mod_log_target_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov rdi, r14
+    mov esi, r15d
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    lea rdi, [mod_log_reason_label]
+    mov esi, mod_log_reason_label_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+    mov rdi, [rsp]
+    mov esi, [rsp + 8]
+    test rdi, rdi
+    jz .default_reason
+    test esi, esi
+    jle .default_reason
+    cmp esi, AUTOMOD_LOG_TEXT_CAP
+    jbe .reason_cap_ready
+    mov esi, AUTOMOD_LOG_TEXT_CAP
+.reason_cap_ready:
+    call automod_append_sanitized
+    test eax, eax
+    js .out
+    jmp .send
+.default_reason:
+    lea rdi, [mod_log_default_reason]
+    mov esi, mod_log_default_reason_len
+    call report_append_bytes
+    test eax, eax
+    js .out
+.send:
+    lea rdi, [report_log_channel]
+    mov esi, r13d
+    lea rdx, [report_log]
+    mov ecx, [report_log_len]
+    call discord_send_text
+.out:
+    add rsp, 32
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; Sends a bounded Automod audit line to the configured log channel only when the
 ; persisted channel ID is a valid nonzero decimal. Audit delivery cannot reverse
 ; a delete decision or prevent the user-facing Automod notice.
@@ -4536,6 +4726,28 @@ automod_log_message_label: db '||', 10, 'Pesan: ```'
 automod_log_message_label_len equ $ - automod_log_message_label
 automod_log_fence: db '```'
 automod_log_fence_len equ $ - automod_log_fence
+mod_log_prefix: db 'MODERATION', 10, 'Action: '
+mod_log_prefix_len equ $ - mod_log_prefix
+mod_log_moderator_label: db 10, 'Moderator: '
+mod_log_moderator_label_len equ $ - mod_log_moderator_label
+mod_log_target_label: db 10, 'Target: '
+mod_log_target_label_len equ $ - mod_log_target_label
+mod_log_reason_label: db 10, 'Alasan: '
+mod_log_reason_label_len equ $ - mod_log_reason_label
+mod_log_default_reason: db 'Tidak ada alasan'
+mod_log_default_reason_len equ $ - mod_log_default_reason
+mod_reason_dash: db '-'
+mod_reason_dash_len equ $ - mod_reason_dash
+mod_action_kick: db 'Kick'
+mod_action_kick_len equ $ - mod_action_kick
+mod_action_ban: db 'Ban'
+mod_action_ban_len equ $ - mod_action_ban
+mod_action_unban: db 'Unban'
+mod_action_unban_len equ $ - mod_action_unban
+mod_action_timeout: db 'Timeout'
+mod_action_timeout_len equ $ - mod_action_timeout
+mod_action_warn: db 'Warn'
+mod_action_warn_len equ $ - mod_action_warn
 chat_log_prefix: db 'CHAT', 10, 'User: '
 chat_log_prefix_len equ $ - chat_log_prefix
 chat_log_unknown_user: db '(tidak diketahui)'
