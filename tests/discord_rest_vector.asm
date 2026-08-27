@@ -6,6 +6,7 @@ extern discord_delete_message
 extern discord_get_json
 extern discord_get_channel_messages
 extern discord_bulk_delete_messages
+extern discord_interaction_respond_text
 extern discord_unban_member
 extern discord_kick_member
 extern discord_ban_member
@@ -22,6 +23,7 @@ extern json_escape_append
 
 global _start
 global secure_https_post_json
+global secure_https_post_json_unauth
 global secure_https_delete
 global secure_https_delete_with_header
 global secure_https_get
@@ -642,6 +644,72 @@ _start:
     mov dword [expected_post_body_len], expected_body_len
     mov qword [mock_status], 201
 
+    ; Interaction callback uses an unauthenticated one-time token URL while
+    ; NASM retains all validation, escaping, and response policy.
+    mov dword [failure_stage], 89
+    lea rax, [expected_interaction_url]
+    mov [expected_unauth_url_ptr], rax
+    mov dword [expected_unauth_url_len], expected_interaction_url_len
+    lea rax, [expected_interaction_body]
+    mov [expected_unauth_body_ptr], rax
+    mov dword [expected_unauth_body_len], expected_interaction_body_len
+    mov qword [unauth_status], 204
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_token]
+    mov ecx, interaction_token_len
+    lea r8, [interaction_text]
+    mov r9d, interaction_text_len
+    mov eax, 64
+    call discord_interaction_respond_text
+    test eax, eax
+    jnz .fail
+    cmp qword [unauth_calls], 1
+    jne .fail
+
+    mov dword [failure_stage], 90
+    mov qword [unauth_status], 429
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_token]
+    mov ecx, interaction_token_len
+    lea r8, [interaction_text]
+    mov r9d, interaction_text_len
+    mov eax, 64
+    call discord_interaction_respond_text
+    cmp eax, -1
+    jne .fail
+    cmp qword [unauth_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 91
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_bad_token]
+    mov ecx, interaction_bad_token_len
+    lea r8, [interaction_text]
+    mov r9d, interaction_text_len
+    mov eax, 64
+    call discord_interaction_respond_text
+    cmp eax, -1
+    jne .fail
+    cmp qword [unauth_calls], 2
+    jne .fail
+
+    mov dword [failure_stage], 92
+    lea rdi, [interaction_id]
+    mov esi, interaction_id_len
+    lea rdx, [interaction_token]
+    mov ecx, interaction_token_len
+    lea r8, [interaction_text]
+    mov r9d, interaction_text_len
+    xor eax, eax
+    call discord_interaction_respond_text
+    cmp eax, -1
+    jne .fail
+    cmp qword [unauth_calls], 2
+    jne .fail
+
     mov dword [failure_stage], 10
     mov qword [put_status], 204
     lea rdi, [channel_id]
@@ -780,6 +848,42 @@ secure_https_post_json:
     ret
 .transport_fail:
     mov eax, -1
+    pop rbx
+    ret
+
+; RDI=url, RSI=body, RDX=body len, RCX=response, R8=capacity, R9=status out.
+secure_https_post_json_unauth:
+    push rbx
+    push r12
+    mov rbx, rdx
+    mov r12, rcx
+    mov r10, [expected_unauth_url_ptr]
+    mov r11d, [expected_unauth_url_len]
+    call equal_cstring
+    test al, al
+    jz .fail
+    cmp ebx, [expected_unauth_body_len]
+    jne .fail
+    mov rdi, rsi
+    mov rsi, [expected_unauth_body_ptr]
+    mov edx, [expected_unauth_body_len]
+    call equal_bytes
+    test al, al
+    jz .fail
+    cmp r8d, 2
+    jb .fail
+    test r9, r9
+    jz .fail
+    mov byte [r12], 0
+    mov rax, [unauth_status]
+    mov [r9], rax
+    inc qword [unauth_calls]
+    xor eax, eax
+    jmp .out
+.fail:
+    mov eax, -1
+.out:
+    pop r12
     pop rbx
     ret
 
@@ -1174,6 +1278,18 @@ expected_bulk_delete_url: db 'https://discord.com/api/v10/channels/1234567890123
 expected_bulk_delete_url_len equ $ - expected_bulk_delete_url
 expected_bulk_delete_body: db '{"messages":["111111111111111111","222222222222222222"]}'
 expected_bulk_delete_body_len equ $ - expected_bulk_delete_body
+interaction_id: db '112233445566778899'
+interaction_id_len equ $ - interaction_id
+interaction_token: db 'abc_DEF-123.token'
+interaction_token_len equ $ - interaction_token
+interaction_bad_token: db 'bad token'
+interaction_bad_token_len equ $ - interaction_bad_token
+interaction_text: db 'Hi "Caine"'
+interaction_text_len equ $ - interaction_text
+expected_interaction_url: db 'https://discord.com/api/v10/interactions/112233445566778899/abc_DEF-123.token/callback'
+expected_interaction_url_len equ $ - expected_interaction_url
+expected_interaction_body: db '{"type":4,"data":{"content":"Hi \"Caine\"","flags":64,"allowed_mentions":{"parse":[]}}}'
+expected_interaction_body_len equ $ - expected_interaction_body
 message_id: db '987654321098765432'
 message_id_len equ $ - message_id
 role_id: db '111222333444555666'
@@ -1270,6 +1386,12 @@ expected_post_url_ptr: dq 0
 expected_post_url_len: dd 0
 expected_post_body_ptr: dq 0
 expected_post_body_len: dd 0
+expected_unauth_url_ptr: dq 0
+expected_unauth_url_len: dd 0
+expected_unauth_body_ptr: dq 0
+expected_unauth_body_len: dd 0
+unauth_status: dq 0
+unauth_calls: dq 0
 delete_status: dq 0
 expected_delete_ptr: dq 0
 expected_delete_len: dd 0

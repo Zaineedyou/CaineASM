@@ -6,6 +6,7 @@ global discord_delete_message
 global discord_get_json
 global discord_get_channel_messages
 global discord_bulk_delete_messages
+global discord_interaction_respond_text
 global discord_unban_member
 global discord_kick_member
 global discord_ban_member
@@ -20,6 +21,7 @@ global discord_add_member_role
 global discord_remove_member_role
 
 extern secure_https_post_json
+extern secure_https_post_json_unauth
 extern secure_https_delete
 extern secure_https_delete_with_header
 extern secure_https_get
@@ -46,6 +48,11 @@ extern discord_token_len
 %define NICK_CHARS_MAX 32
 %define CLEAR_FETCH_MIN 2
 %define CLEAR_FETCH_MAX 100
+%define INTERACTION_ID_CAP 64
+%define INTERACTION_TOKEN_CAP 192
+%define INTERACTION_TEXT_MAX 2000
+%define INTERACTION_URL_CAP 512
+%define INTERACTION_BODY_CAP 4096
 
 ; RDI=channel ID pointer, ESI=channel ID length, RDX=text pointer, ECX=text length.
 ; EAX=0 only when Discord reports HTTP 2xx. The adapter only transports the request.
@@ -231,6 +238,159 @@ discord_get_json:
 ; RDI=channel, ESI=len, RDX=response, ECX=capacity, R8D=limit (2..100).
 ; RAX=response bytes only after a bounded authenticated Discord GET. This
 ; primitive does not parse messages or build delete policy.
+; RDI=channel, ESI=channel len, RDX=fixed 64-byte NUL-terminated ID slots,
+; ECX=count (2..100). EAX=0 only after an authenticated HTTP 2xx POST.
+; Every slot must be a non-empty decimal ID and all IDs must be unique. The
+; application payload is constructed here, not in the C transport boundary.
+; RDI=interaction ID, ESI=ID len, RDX=interaction token, ECX=token len,
+; R8=content, R9D=content len, RAX=flags. EAX=0 only after callback HTTP
+; 2xx. The one-time interaction token is never logged or persisted.
+discord_interaction_respond_text:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12, rdi
+    mov r13d, esi
+    mov r14, rdx
+    mov r15d, ecx
+    mov [interaction_content_ptr], r8
+    mov [interaction_content_len], r9d
+    mov [interaction_flags], rax
+    test r12, r12
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r8, r8
+    jz .bad
+    test r13d, r13d
+    jle .bad
+    cmp r13d, INTERACTION_ID_CAP - 1
+    ja .bad
+    test r15d, r15d
+    jle .bad
+    cmp r15d, INTERACTION_TOKEN_CAP - 1
+    ja .bad
+    cmp r9d, INTERACTION_TEXT_MAX
+    ja .bad
+    mov rdi, r12
+    mov esi, r13d
+    call is_decimal_identifier
+    test al, al
+    jz .bad
+    mov rdi, r14
+    mov esi, r15d
+    call validate_interaction_token
+    test al, al
+    jz .bad
+    mov rax, [interaction_flags]
+    cmp rax, 64
+    jne .bad
+    mov eax, interaction_callback_prefix_len
+    add eax, r13d
+    add eax, 1
+    add eax, r15d
+    add eax, interaction_callback_suffix_len
+    cmp eax, INTERACTION_URL_CAP - 1
+    ja .bad
+    lea rdi, [interaction_url]
+    lea rsi, [interaction_callback_prefix]
+    mov edx, interaction_callback_prefix_len
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_callback_prefix_len]
+    mov rsi, r12
+    mov edx, r13d
+    call copy_bytes
+    lea rdi, [interaction_url + interaction_callback_prefix_len]
+    add rdi, r13
+    mov byte [rdi], '/'
+    inc rdi
+    mov rsi, r14
+    mov edx, r15d
+    call copy_bytes
+    add rdi, r15
+    lea rsi, [interaction_callback_suffix]
+    mov edx, interaction_callback_suffix_len
+    call copy_bytes
+    add rdi, rdx
+    mov byte [rdi], 0
+
+    lea rdi, [interaction_body]
+    lea rsi, [interaction_body_prefix]
+    mov edx, interaction_body_prefix_len
+    call copy_bytes
+    lea rdi, [interaction_body + interaction_body_prefix_len]
+    mov esi, INTERACTION_BODY_CAP - interaction_body_prefix_len - interaction_body_suffix_len - 1
+    mov rdx, [interaction_content_ptr]
+    mov ecx, [interaction_content_len]
+    call json_escape_append
+    test eax, eax
+    js .bad
+    mov ebx, eax
+    lea rdi, [interaction_body + interaction_body_prefix_len]
+    add rdi, rbx
+    lea rsi, [interaction_body_suffix]
+    mov edx, interaction_body_suffix_len
+    call copy_bytes
+    mov eax, ebx
+    add eax, interaction_body_prefix_len + interaction_body_suffix_len
+    mov [interaction_body_len], eax
+    mov byte [interaction_body + rax], 0
+    lea rdi, [interaction_url]
+    lea rsi, [interaction_body]
+    mov edx, eax
+    lea rcx, [response_body]
+    mov r8d, RESPONSE_BODY_CAP
+    lea r9, [response_status]
+    call secure_https_post_json_unauth
+    test rax, rax
+    js .bad
+    mov rax, [response_status]
+    cmp rax, 200
+    jb .bad
+    cmp rax, 300
+    jae .bad
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=token bytes, ESI=len. AL=1 only for bounded printable ASCII token bytes.
+validate_interaction_token:
+    test rdi, rdi
+    jz .no
+    test esi, esi
+    jle .no
+    cmp esi, INTERACTION_TOKEN_CAP - 1
+    ja .no
+    xor ecx, ecx
+.loop:
+    cmp ecx, esi
+    jae .yes
+    mov al, [rdi + rcx]
+    cmp al, 0x21
+    jb .no
+    cmp al, 0x7e
+    ja .no
+    inc ecx
+    jmp .loop
+.yes:
+    mov al, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
 ; RDI=channel, ESI=channel len, RDX=fixed 64-byte NUL-terminated ID slots,
 ; ECX=count (2..100). EAX=0 only after an authenticated HTTP 2xx POST.
 ; Every slot must be a non-empty decimal ID and all IDs must be unique. The
@@ -2155,6 +2315,14 @@ url_suffix: db '/messages'
 url_suffix_len equ $ - url_suffix
 clear_limit_prefix: db '?limit='
 clear_limit_prefix_len equ $ - clear_limit_prefix
+interaction_callback_prefix: db 'https://discord.com/api/v10/interactions/'
+interaction_callback_prefix_len equ $ - interaction_callback_prefix
+interaction_callback_suffix: db '/callback'
+interaction_callback_suffix_len equ $ - interaction_callback_suffix
+interaction_body_prefix: db '{"type":4,"data":{"content":"'
+interaction_body_prefix_len equ $ - interaction_body_prefix
+interaction_body_suffix: db '","flags":64,"allowed_mentions":{"parse":[]}}}'
+interaction_body_suffix_len equ $ - interaction_body_suffix
 bulk_delete_suffix: db '/messages/bulk-delete'
 bulk_delete_suffix_len equ $ - bulk_delete_suffix
 bulk_delete_body_prefix: db '{"messages":['
@@ -2225,6 +2393,10 @@ nick_len: dd 0
 clear_get_url_len: dd 0
 audit_reason_ptr: dq 0
 audit_reason_len: dd 0
+interaction_content_ptr: dq 0
+interaction_content_len: dd 0
+interaction_flags: dq 0
+interaction_body_len: dd 0
 section .bss
 
 request_url: resb REQUEST_URL_CAP
@@ -2235,3 +2407,5 @@ response_body: resb RESPONSE_BODY_CAP
 slowmode_body: resb 64
 timeout_body: resb TIMEOUT_BODY_CAP
 audit_reason_header: resb AUDIT_HEADER_CAP
+interaction_url: resb INTERACTION_URL_CAP
+interaction_body: resb INTERACTION_BODY_CAP
