@@ -1,68 +1,67 @@
 # CaineASM
 
-CaineASM adalah port assembly-dominan dari bot Discord [CaineGO](https://github.com/Zaineedyou/CaineGO) untuk Linux x86-64. Port ini tidak menyertakan bridge Minecraft–Discord.
-
-Logika bot ditulis dalam NASM. Adapter C kecil memakai libcurl untuk transport HTTPS dan WSS, termasuk verifikasi TLS.
+CaineASM adalah port Linux x86-64 dari [CaineGO](https://github.com/Zaineedyou/CaineGO) yang memindahkan logika bot ke NASM. C/libcurl menangani koneksi HTTPS dan WSS. Fitur bridge Minecraft–Discord tidak disertakan.
 
 ## Status
 
-**Work in progress.** Build dan vector test tersedia, tetapi test tersebut memeriksa modul secara terpisah. Lolos test tidak membuktikan seluruh alur bot sudah bekerja end-to-end dengan Discord dan Groq, dan bukan jaminan siap produksi.
+Proyek ini masih dikerjakan. `make test` menjalankan vector test untuk modul seperti Gateway, JSON, REST, permissions, persistence, attachments, dan payload vision. Test tersebut berjalan pada modul terpisah. Test itu tidak menghubungkan bot ke Discord atau Groq, jadi belum membuktikan alur end-to-end atau kesiapan produksi.
 
-## Isi repositori
+## Batas kode
 
-- `src/`: modul NASM untuk Gateway, command routing, interactions, policy guild, parsing, moderation, attachment, AI, dan persistence.
-- `adapter/`: bootstrap proses dan adapter transport C/libcurl.
-- `tests/`: assembly vector test untuk modul-modul seperti JSON, Gateway, REST, persistence, permissions, dan payload vision.
-- [`docs/architecture.md`](docs/architecture.md): pembagian tanggung jawab dan batas implementasi.
+- `src/gateway.asm` menangani event Gateway, heartbeat, Identify, Resume, dan reconnect.
+- `src/dispatch.asm`, `src/commands.asm`, dan `src/interactions.asm` menangani routing pesan, command, dan interactions.
+- `src/guild_*.asm`, `src/channel_permissions.asm`, serta modul state mengelola konfigurasi guild, permissions, dan data bot.
+- `src/groq.asm`, `src/attachment_*.asm`, dan `src/vision_payload.asm` menangani request AI serta pemrosesan attachment dan payload vision.
+- `adapter/` berisi bootstrap C dan transport libcurl. Validasi sertifikat TLS dan hostname dilakukan libcurl, bukan implementasi TLS buatan proyek ini.
+- [`docs/architecture.md`](docs/architecture.md) menjelaskan batas implementasi dan fitur yang masih menjadi target.
 
 ## Build dan test
 
-Pada Debian atau Ubuntu, pasang toolchain berikut:
+Di Debian atau Ubuntu, pasang NASM, GCC, pkg-config, dan header libcurl:
 
 ```sh
 sudo apt-get update
 sudo apt-get install -y build-essential nasm pkg-config libcurl4-openssl-dev
 ```
 
-Bangun executable dan jalankan vector test:
+Bangun program dan jalankan test vector:
 
 ```sh
 make
 make test
 ```
 
-Untuk menjalankan pemeriksaan lokal tambahan, termasuk build, test, dan pengecekan rasio source Assembly:
+`make` membuat `build/caine-asm`. `make test` tidak memerlukan token Discord atau API key Groq.
+
+Pemeriksaan tambahan yang dipakai repo:
 
 ```sh
 bash tests/run-local.sh
 ```
 
-Executable hasil build berada di `build/caine-asm`.
-
 ## Menjalankan
 
-Program memerlukan token bot Discord dan API key Groq dari environment:
+Isi kedua variabel wajib berikut dengan kredensial milikmu, lalu jalankan binary:
 
 ```sh
-export DISCORD_TOKEN='isi-token-bot-discord'
-export GROQ_API_KEY='isi-api-key-groq'
+export DISCORD_TOKEN='token-bot-discord'
+export GROQ_API_KEY='api-key-groq'
 ./build/caine-asm
 ```
 
-Jangan commit token atau API key ke repositori. Program berhenti dengan pesan konfigurasi jika salah satu variabel wajib tersebut tidak tersedia.
+Jangan masukkan kredensial ke Git. Program berhenti jika salah satu variabel wajib tidak tersedia.
 
-## Container
+## Docker
 
-Repositori menyertakan Dockerfile multi-stage:
+Image dapat dibuat dari Dockerfile yang disertakan:
 
 ```sh
 docker build -t caineasm .
-docker run --rm \
-  -e DISCORD_TOKEN="$DISCORD_TOKEN" \
-  -e GROQ_API_KEY="$GROQ_API_KEY" \
-  caineasm
+docker run --rm -e DISCORD_TOKEN -e GROQ_API_KEY caineasm
 ```
+
+Pastikan kedua variabel sudah tersedia di shell sebelum menjalankan container.
 
 ## Lisensi
 
-Repositori ini belum menyertakan file lisensi. Ketentuan penggunaan ulang belum dinyatakan.
+[Lisensi CaineASM](LICENSE) mengizinkan penggunaan terbatas. Lisensi ini tidak mengizinkan modifikasi, pembuatan turunan, atau redistribusi kode maupun binary. Ini bukan lisensi open-source.

@@ -1,0 +1,30 @@
+CaineASM All Rights Reserved and Limited Use License
+
+Copyright (c) 2026 Zaineedyou. All rights reserved.
+
+This is a custom, restrictive license. It is not an open-source license.
+
+1. Limited permission
+
+The copyright holder grants you a non-exclusive, non-transferable permission to download, compile, install, configure, and run an unmodified copy of CaineASM for your own personal use or in a Discord server or community that you administer. You may make copies only as necessary to perform those activities and keep one backup copy. Keep this copyright notice with every permitted copy.
+
+2. Restrictions
+
+Unless the copyright holder gives you separate written permission, you may not:
+
+- modify, adapt, or create derivative works from CaineASM;
+- redistribute, publish, mirror, sublicense, rent, sell, or otherwise provide copies of its source code or binaries to another person;
+- operate CaineASM on behalf of an unrelated third party or offer it as a hosted service; or
+- remove or alter copyright or license notices.
+
+Configuration through the documented environment variables and bot commands is allowed when using an unmodified copy.
+
+3. Other rights
+
+All rights not expressly granted above are reserved by the copyright holder. This license does not grant rights to third-party components included with or used by CaineASM. Those components remain subject to their own licenses.
+
+4. No warranty
+
+CaineASM is provided "AS IS", without warranties or conditions of any kind, to the extent permitted by law. The copyright holder is not liable for claims or damages arising from use of the software, to the extent permitted by law.
+
+If a provision of this license is unenforceable under applicable law, the remaining provisions continue to apply. Rights that cannot legally be waived remain unaffected.
